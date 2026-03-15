@@ -175,7 +175,7 @@ def _had_sunday_last_month(staff: Staff, d: date, db: Session) -> bool:
 
 
 def _had_duty_previous_day(staff: Staff, d: date, db: Session) -> bool:
-    return _has_gap_conflict(db, staff.id, d, ignore_dates={d}, include_standby=False)
+    return _has_gap_conflict(db, staff.id, d, ignore_dates={d}, include_standby=True)
 
 
 def _has_gap_conflict(
@@ -436,13 +436,13 @@ def _apply_entry_transfer(counts: Dict[int, dict], donor_id: int, receiver_id: i
 def _can_take_working_day(db: Session, staff: Staff, entry: Calendar) -> bool:
     if not staff.active or not _is_staff_available(staff, entry.date, db):
         return False
-    return not _has_gap_conflict(db, staff.id, entry.date, ignore_dates={entry.date}, include_standby=False)
+    return not _has_gap_conflict(db, staff.id, entry.date, ignore_dates={entry.date}, include_standby=True)
 
 
 def _can_take_non_working_day(db: Session, staff: Staff, entry: Calendar) -> bool:
     if not staff.active or not _is_staff_available(staff, entry.date, db):
         return False
-    return not _has_gap_conflict(db, staff.id, entry.date, ignore_dates={entry.date}, include_standby=False)
+    return not _has_gap_conflict(db, staff.id, entry.date, ignore_dates={entry.date}, include_standby=True)
 
 
 def _pick_standby_for_entry(db: Session, entry: Calendar, staff_pool: List[Staff]) -> Optional[int]:
@@ -773,6 +773,7 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
             entry.status = StatusEnum.VACANT
             entry.remarks = "No eligible staff available"
             _log_remark(db, f"No eligible staff available on {entry.date}.", "error", entry.date)
+            db.flush()
             continue
 
         if skipped > 0:
@@ -787,6 +788,7 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
         entry.assigned_standby_id = standby_staff.id if standby_staff else None
         entry.status = StatusEnum.ASSIGNED
         entry.remarks = None
+        db.flush()
 
         if getattr(duty_staff, debt_attr, 0) > 0:
             setattr(duty_staff, debt_attr, getattr(duty_staff, debt_attr) - 1)
@@ -798,11 +800,14 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
         else:
             working_idx = next_idx
 
-    if not settings.auto_assign_standby:
-        db.query(Calendar).filter(
-            Calendar.date >= start_date,
-            Calendar.date <= end_date,
-        ).update({"assigned_standby_id": None})
+    # Clear all standbys after initial generation so rebalancing passes
+    # are not blocked by standby adjacency constraints. _assign_standby_for_range
+    # will assign all standbys after duties are finalised.
+    db.query(Calendar).filter(
+        Calendar.date >= start_date,
+        Calendar.date <= end_date,
+    ).update({"assigned_standby_id": None})
+    db.flush()
 
 
 def _assign_standby_for_range(db: Session, start_date: date, end_date: date):
@@ -860,7 +865,9 @@ def regenerate_from_month(db: Session, year: int, month: int):
 
     start_date, _ = _month_bounds(year, month)
     _, end_date = _month_bounds(end_year, end_month)
-    _assign_standby_for_range(db, start_date, end_date)
+    settings = _get_settings(db)
+    if settings.auto_assign_standby:
+        _assign_standby_for_range(db, start_date, end_date)
     _recompute_staff_counters(db)
     db.commit()
 
