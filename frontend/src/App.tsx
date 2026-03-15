@@ -1,5 +1,5 @@
 import { Routes, Route, NavLink } from 'react-router-dom'
-import { CalendarDays, Users, Settings, BarChart3, Shield, BookOpen } from 'lucide-react'
+import { CalendarDays, Users, Settings, BarChart3, Shield, BookOpen, Zap, Repeat } from 'lucide-react'
 import clsx from 'clsx'
 
 import CalendarPage from './pages/CalendarPage'
@@ -8,14 +8,16 @@ import RosterPage from './pages/RosterPage'
 import AuditPage from './pages/AuditPage'
 import SettingsPage from './pages/SettingsPage'
 import OperationsHandbookPage from './pages/OperationsHandbookPage'
+import LogicPage from './pages/LogicPage'
 
 const navItems = [
   { to: '/', icon: CalendarDays, label: 'Calendar' },
-  { to: '/roster', icon: Shield, label: 'Roster' },
+  { to: '/roster', icon: Repeat, label: 'Roster' },
   { to: '/staff', icon: Users, label: 'Staff' },
   { to: '/audit', icon: BarChart3, label: 'Audit' },
   { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/handbook', icon: BookOpen, label: 'Handbook' },
+  { to: '/logic', icon: Zap, label: 'Logic' },
 ]
 
 export default function App() {
@@ -24,7 +26,7 @@ export default function App() {
       <header className="bg-brand-800 text-white shadow-lg no-print">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Shield className="w-6 h-6 text-brand-300" />
+            <Zap className="w-6 h-6 text-brand-300 fill-brand-300/20" />
             <div className="flex flex-col leading-none">
               <span className="kram-wordmark text-lg tracking-[0.22em]">KRAM</span>
               <span className="kram-tagline hidden sm:block text-[10px] tracking-[0.12em] text-brand-200">
@@ -66,6 +68,7 @@ export default function App() {
           <Route path="/" element={<CalendarPage />} />
           <Route path="/roster" element={<RosterPage />} />
           <Route path="/staff" element={<StaffPage />} />
+          <Route path="/logic" element={<LogicPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/handbook" element={<OperationsHandbookPage />} />

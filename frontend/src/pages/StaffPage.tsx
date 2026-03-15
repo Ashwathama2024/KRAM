@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, Trash2, ToggleLeft, ToggleRight, Users, Calendar } from 'lucide-react'
+import { UserPlus, Trash2, ToggleLeft, ToggleRight, Users, Calendar, Briefcase } from 'lucide-react'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
+import clsx from 'clsx'
 import { staffApi, availabilityApi, type Staff } from '../services/api'
 import { staffLabel } from '../utils/staff'
 
@@ -65,20 +66,25 @@ export default function StaffPage() {
   const staffAvail = (sid: number) => availability.filter(a => a.staff_id === sid)
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-slate-800">Staff Management</h1>
-        <p className="text-sm text-slate-500">Add, remove, and manage staff members and their unavailability</p>
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
+            <Users className="w-6 h-6 text-brand-600" />
+            Staff Management
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">Manage personnel records, service windows, and unavailability.</p>
+        </div>
       </div>
 
-      <div className="card">
-        <h2 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-          <UserPlus className="w-4 h-4" /> Add Staff Member
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+          <UserPlus className="w-4 h-4" /> Add New Staff Member
         </h2>
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           <input
-            className="input flex-1"
-            placeholder="Name / Rank / Number"
+            className="input flex-1 rounded-xl border-slate-200"
+            placeholder="Name / Rank / Service Number"
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && newName.trim() && createMut.mutate()}
@@ -86,90 +92,105 @@ export default function StaffPage() {
           <button
             onClick={() => createMut.mutate()}
             disabled={!newName.trim() || createMut.isPending}
-            className="btn-primary"
+            className="btn-primary px-8 rounded-xl"
           >
-            Add
+            {createMut.isPending ? 'Adding...' : 'Add Staff'}
           </button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
-          <label className="space-y-1">
-            <span className="text-xs text-slate-500">Join date (optional)</span>
-            <input type="date" className="input" value={joinDate} onChange={e => setJoinDate(e.target.value)} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold text-slate-500 ml-1">Reporting Date</span>
+            <input type="date" className="input rounded-xl border-slate-200" value={joinDate} onChange={e => setJoinDate(e.target.value)} />
           </label>
-          <label className="space-y-1">
-            <span className="text-xs text-slate-500">Relieve date (optional)</span>
-            <input type="date" className="input" value={relieveDate} onChange={e => setRelieveDate(e.target.value)} />
+          <label className="space-y-1.5">
+            <span className="text-xs font-bold text-slate-500 ml-1">Relieve Date (Optional)</span>
+            <input type="date" className="input rounded-xl border-slate-200" value={relieveDate} onChange={e => setRelieveDate(e.target.value)} />
           </label>
         </div>
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-700 text-sm flex items-center gap-2">
-            <Users className="w-4 h-4" /> Staff Members ({staff.length})
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+            <Users className="w-4 h-4 text-slate-400" /> Active Roster Pool ({staff.filter(s => s.active).length})
           </h2>
         </div>
         {isLoading ? (
-          <div className="text-center py-10 text-slate-400">Loading...</div>
+          <div className="text-center py-20 text-slate-400">Synchronizing staff data...</div>
         ) : staff.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">No staff members yet. Add some above.</div>
+          <div className="text-center py-20 text-slate-400 font-medium">No staff members registered.</div>
         ) : (
           <div className="divide-y divide-slate-100">
             {staff.map(s => (
-              <div key={s.id}>
-                <div className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm ${s.active ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-400'}`}>
+              <div key={s.id} className="group">
+                <div className="flex items-center justify-between px-6 py-4 hover:bg-slate-50/80 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <div className={clsx(
+                        "w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm transition-all shadow-sm",
+                        s.active ? "bg-brand-600 text-white shadow-brand-100" : "bg-slate-100 text-slate-400"
+                    )}>
                       {staffLabel(s).slice(0, 2).toUpperCase()}
                     </div>
                     <div>
-                      <div className={`font-medium ${s.active ? 'text-slate-800' : 'text-slate-400 line-through'}`} title={s.name}>
-                        {staffLabel(s)}
-                      </div>
-                      <div className="text-xs text-slate-400 mt-0.5">{s.name}</div>
-                      <div className="text-xs text-slate-400 flex gap-3 mt-0.5">
-                        <span>W: {s.total_working_duties}</span>
-                        <span>H: {s.total_holiday_duties}</span>
-                        {s.duty_debt > 0 && <span className="text-orange-500">Debt: {s.duty_debt}</span>}
-                      </div>
-                      {(s.join_date || s.relieve_date) && (
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          {s.join_date ? `From ${format(new Date(`${s.join_date}T00:00:00`), 'dd MMM yyyy')}` : 'From start'}
-                          {s.relieve_date ? ` • Until ${format(new Date(`${s.relieve_date}T00:00:00`), 'dd MMM yyyy')}` : ''}
+                      <div className="flex items-center gap-2">
+                        <div className={clsx("font-bold text-base", s.active ? "text-slate-900" : "text-slate-400 line-through")}>
+                            {staffLabel(s)}
                         </div>
-                      )}
+                        {!s.active && <span className="text-[10px] font-bold uppercase tracking-widest bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">Inactive</span>}
+                      </div>
+                      <div className="text-xs text-slate-400 font-medium">{s.name}</div>
+                      <div className="flex items-center gap-4 mt-1.5">
+                         <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">
+                             <Briefcase className="w-3 h-3 text-emerald-500" />
+                             <span>W: {s.total_working_duties}</span>
+                         </div>
+                         <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">
+                             <Calendar className="w-3 h-3 text-amber-500" />
+                             <span>H: {s.total_holiday_duties}</span>
+                         </div>
+                         {s.duty_debt > 0 && (
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                                <span>Debt: {s.duty_debt}</span>
+                            </div>
+                         )}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <button
                       onClick={() => setShowAvail(showAvail === s.id ? null : s.id)}
-                      className="text-xs text-slate-400 hover:text-brand-600 flex items-center gap-1"
+                      className={clsx(
+                          "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                          showAvail === s.id ? "bg-brand-50 text-brand-700 border border-brand-100" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                      )}
                     >
-                      <Calendar className="w-3.5 h-3.5" />
-                      <span>{staffAvail(s.id).length}</span>
+                      <Calendar className="w-4 h-4" />
+                      <span>{staffAvail(s.id).length} records</span>
                     </button>
-                    <button onClick={() => toggleMut.mutate(s)} className={s.active ? 'text-emerald-500 hover:text-emerald-700' : 'text-slate-300 hover:text-slate-500'}>
-                      {s.active ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
+                    <div className="w-px h-6 bg-slate-200 mx-1" />
+                    <button onClick={() => toggleMut.mutate(s)} className={clsx("transition-colors", s.active ? 'text-emerald-500 hover:text-emerald-700' : 'text-slate-300 hover:text-slate-500')}>
+                      {s.active ? <ToggleRight className="w-8 h-8" /> : <ToggleLeft className="w-8 h-8" />}
                     </button>
                     <button
                       onClick={() => {
-                        if (confirm(`Remove ${s.name} (${staffLabel(s)})?`)) deleteMut.mutate(s.id)
+                        if (confirm(`Remove ${s.name} (${staffLabel(s)}) from system?`)) deleteMut.mutate(s.id)
                       }}
-                      className="text-slate-300 hover:text-red-500"
+                      className="text-slate-300 hover:text-rose-500 transition-colors p-1"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
 
                 {showAvail === s.id && (
-                  <div className="px-4 pb-3 bg-orange-50 border-t border-orange-100">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-3">
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold text-slate-500">Join date</span>
+                  <div className="px-6 py-5 bg-slate-50/50 border-y border-slate-100 animate-in slide-in-from-top-2 duration-300">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      <label className="space-y-1.5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Reporting Date</span>
                         <input
                           type="date"
-                          className="input bg-white"
+                          className="input bg-white rounded-xl border-slate-200"
                           value={(serviceWindow[s.id]?.join_date ?? s.join_date ?? '')}
                           onChange={e => setServiceWindow(current => ({
                             ...current,
@@ -180,11 +201,11 @@ export default function StaffPage() {
                           }))}
                         />
                       </label>
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold text-slate-500">Relieve date</span>
+                      <label className="space-y-1.5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Relieve Date</span>
                         <input
                           type="date"
-                          className="input bg-white"
+                          className="input bg-white rounded-xl border-slate-200"
                           value={(serviceWindow[s.id]?.relieve_date ?? s.relieve_date ?? '')}
                           onChange={e => setServiceWindow(current => ({
                             ...current,
@@ -196,42 +217,47 @@ export default function StaffPage() {
                         />
                       </label>
                     </div>
-                    <div className="mt-2">
-                      <button
-                        onClick={() => updateServiceMut.mutate({
-                          id: s.id,
-                          data: {
-                            join_date: serviceWindow[s.id]?.join_date || undefined,
-                            relieve_date: serviceWindow[s.id]?.relieve_date || undefined,
-                          },
-                        })}
-                        className="btn-secondary"
-                        disabled={updateServiceMut.isPending}
-                      >
-                        Save Service Window
-                      </button>
+                    <button
+                      onClick={() => updateServiceMut.mutate({
+                        id: s.id,
+                        data: {
+                          join_date: serviceWindow[s.id]?.join_date || undefined,
+                          relieve_date: serviceWindow[s.id]?.relieve_date || undefined,
+                        },
+                      })}
+                      className="btn-secondary w-full md:w-auto px-6 py-2 rounded-xl text-xs font-bold"
+                      disabled={updateServiceMut.isPending}
+                    >
+                      Update Service Window
+                    </button>
+                    
+                    <div className="mt-6">
+                        <div className="text-[10px] font-bold text-brand-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                            <span className="w-1 h-1 bg-brand-600 rounded-full" />
+                            Unavailability History
+                        </div>
+                        {staffAvail(s.id).length === 0 ? (
+                          <p className="text-xs text-slate-400 italic">No leave or official duty records found.</p>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {staffAvail(s.id).map(a => (
+                              <div key={a.id} className="flex items-center justify-between text-xs bg-white rounded-xl px-4 py-2.5 border border-slate-200 shadow-sm group/item hover:border-brand-200 transition-all">
+                                <div>
+                                  <span className="font-bold text-slate-800 capitalize">{(a.availability_type || 'leave').replace('_', ' ')}</span>
+                                  <div className="text-[10px] text-slate-500 mt-0.5">
+                                    {format(new Date(a.start_date + 'T00:00:00'), 'dd MMM')}
+                                    {a.start_date !== a.end_date && ` → ${format(new Date(a.end_date + 'T00:00:00'), 'dd MMM')}`}
+                                    {a.reason && <span className="text-slate-400 ml-2 italic">— {a.reason}</span>}
+                                  </div>
+                                </div>
+                                <button onClick={() => deleteAvailMut.mutate(a.id)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                     </div>
-                    <div className="text-xs font-semibold text-orange-700 mt-2 mb-1.5">Unavailability Records</div>
-                    {staffAvail(s.id).length === 0 ? (
-                      <p className="text-xs text-slate-400">No unavailability records</p>
-                    ) : (
-                      <ul className="space-y-1">
-                        {staffAvail(s.id).map(a => (
-                          <li key={a.id} className="flex items-center justify-between text-xs bg-white rounded px-2 py-1.5 border border-orange-100">
-                            <span className="text-slate-700">
-                              <span className="font-medium capitalize">{(a.availability_type || 'leave').replace('_', ' ')}</span>
-                              <span className="mx-1">•</span>
-                              {format(new Date(a.start_date + 'T00:00:00'), 'dd MMM')}
-                              {a.start_date !== a.end_date && ` → ${format(new Date(a.end_date + 'T00:00:00'), 'dd MMM')}`}
-                              {a.reason && <span className="text-slate-400 ml-2">— {a.reason}</span>}
-                            </span>
-                            <button onClick={() => deleteAvailMut.mutate(a.id)} className="text-red-400 hover:text-red-600">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
                   </div>
                 )}
               </div>
@@ -240,34 +266,38 @@ export default function StaffPage() {
         )}
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b bg-slate-50">
-          <h2 className="font-semibold text-slate-700 text-sm">Duty Counters</h2>
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+          <h2 className="font-bold text-slate-800 text-sm">Duty Counters Summary</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-slate-50 text-xs uppercase text-slate-500">
-                <th className="px-4 py-2 text-left">Code</th>
-                <th className="px-4 py-2 text-left">Name</th>
-                <th className="px-4 py-2 text-center">Working</th>
-                <th className="px-4 py-2 text-center">Holiday</th>
-                <th className="px-4 py-2 text-center">Total</th>
-                <th className="px-4 py-2 text-center">Debt</th>
-                <th className="px-4 py-2 text-center">Status</th>
+              <tr className="bg-slate-50/80 text-[10px] uppercase tracking-widest text-slate-400 font-bold">
+                <th className="px-6 py-4 text-left">Code</th>
+                <th className="px-6 py-4 text-left">Full Name</th>
+                <th className="px-6 py-4 text-center">Working</th>
+                <th className="px-6 py-4 text-center">Holiday</th>
+                <th className="px-6 py-4 text-center">Total</th>
+                <th className="px-6 py-4 text-center">Debt</th>
+                <th className="px-6 py-4 text-center">Pool Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {staff.map(s => (
-                <tr key={s.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-2 font-medium">{staffLabel(s)}</td>
-                  <td className="px-4 py-2 text-slate-500">{s.name}</td>
-                  <td className="px-4 py-2 text-center text-emerald-600">{s.total_working_duties}</td>
-                  <td className="px-4 py-2 text-center text-orange-500">{s.total_holiday_duties}</td>
-                  <td className="px-4 py-2 text-center font-semibold">{s.total_working_duties + s.total_holiday_duties}</td>
-                  <td className="px-4 py-2 text-center">{s.duty_debt > 0 ? <span className="text-orange-600 font-medium">{s.duty_debt}</span> : <span className="text-slate-300">0</span>}</td>
-                  <td className="px-4 py-2 text-center">
-                    {s.active ? <span className="badge-working">Active</span> : <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">Inactive</span>}
+                <tr key={s.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-6 py-3.5 font-bold text-slate-900">{staffLabel(s)}</td>
+                  <td className="px-6 py-3.5 text-slate-500 font-medium">{s.name}</td>
+                  <td className="px-6 py-3.5 text-center text-emerald-600 font-bold">{s.total_working_duties}</td>
+                  <td className="px-6 py-3.5 text-center text-amber-500 font-bold">{s.total_holiday_duties}</td>
+                  <td className="px-6 py-3.5 text-center font-black text-slate-800">{s.total_working_duties + s.total_holiday_duties}</td>
+                  <td className="px-6 py-3.5 text-center">{s.duty_debt > 0 ? <span className="text-rose-600 font-black">{s.duty_debt}</span> : <span className="text-slate-200">0</span>}</td>
+                  <td className="px-6 py-3.5 text-center">
+                    {s.active ? (
+                        <span className="text-[10px] font-bold px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-100 uppercase tracking-tighter">Active Pool</span>
+                    ) : (
+                        <span className="text-[10px] font-bold px-2.5 py-1 bg-slate-100 text-slate-500 rounded-full uppercase tracking-tighter">Stand Down</span>
+                    )}
                   </td>
                 </tr>
               ))}

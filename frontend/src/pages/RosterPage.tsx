@@ -95,104 +95,125 @@ export default function RosterPage() {
   const monthNotes = notes.filter(note => !note.date_ref || (note.date_ref >= monthStart && note.date_ref <= monthEnd))
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Roster Generator</h1>
-          <p className="text-sm text-slate-500">Generate and manage duty assignments</p>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
+            <Zap className="w-6 h-6 text-brand-600" />
+            Roster Generator
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">Manage duty assignments and synchronize rotation chains.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setCurrent(subMonths(current, 1))} className="btn-secondary p-2">
-            <ChevronLeft className="w-4 h-4" />
+        <div className="flex items-center bg-white rounded-xl shadow-sm border border-slate-200 p-1.5 self-start">
+          <button onClick={() => setCurrent(subMonths(current, 1))} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
+            <ChevronLeft className="w-5 h-5" />
           </button>
-          <span className="text-base font-semibold text-slate-700 min-w-[140px] text-center">
+          <span className="text-sm font-bold text-slate-800 min-w-[140px] text-center uppercase tracking-wider">
             {format(current, 'MMMM yyyy')}
           </span>
-          <button onClick={() => setCurrent(addMonths(current, 1))} className="btn-secondary p-2">
-            <ChevronRight className="w-4 h-4" />
+          <button onClick={() => setCurrent(addMonths(current, 1))} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
+            <ChevronRight className="w-5 h-5" />
           </button>
         </div>
       </div>
 
-      <div className="card">
-        <h2 className="text-sm font-semibold text-slate-700 mb-3">Logic Controls</h2>
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Logic Controls</h2>
         <div className="flex flex-wrap gap-3">
-          <button onClick={() => generateMut.mutate(false)} disabled={generateMut.isPending} className="btn-primary">
+          <button onClick={() => generateMut.mutate(false)} disabled={generateMut.isPending} className="btn-primary px-6 py-2.5 rounded-xl shadow-md shadow-brand-200">
             <Zap className="w-4 h-4" />
             {generateMut.isPending ? 'Generating...' : 'Sync & Generate Roster'}
           </button>
-          <button onClick={() => generateMut.mutate(true)} disabled={generateMut.isPending} className="btn-secondary">
+          <button onClick={() => generateMut.mutate(true)} disabled={generateMut.isPending} className="btn-secondary px-5 py-2.5 rounded-xl">
             <RefreshCw className="w-4 h-4" />
             Force Regenerate
           </button>
-          <button onClick={() => healMut.mutate()} disabled={healMut.isPending} className="btn-success">
+          <button onClick={() => healMut.mutate()} disabled={healMut.isPending} className="btn-success px-5 py-2.5 rounded-xl text-white">
             <RefreshCw className="w-4 h-4" />
             {healMut.isPending ? 'Healing...' : 'Auto-Heal Roster'}
           </button>
-          <a href={rosterApi.exportCsv(year, month)} className="btn-secondary" download>
-            <Download className="w-4 h-4" /> Export CSV
-          </a>
-          <a href={rosterApi.exportPdf(year, month)} className="btn-secondary" download>
-            <FileText className="w-4 h-4" /> Export PDF
-          </a>
-          <button onClick={() => window.print()} className="btn-secondary">
-            <FileText className="w-4 h-4" /> Print
-          </button>
+          <div className="flex items-center gap-2 ml-auto">
+            <a href={rosterApi.exportCsv(year, month)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export CSV">
+              <Download className="w-5 h-5" />
+            </a>
+            <a href={rosterApi.exportPdf(year, month)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export PDF">
+              <FileText className="w-5 h-5" />
+            </a>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-brand-600">{entries.length}</div>
-          <div className="text-xs text-slate-500 mt-1">Total Days</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-emerald-600">{assigned}</div>
-          <div className="text-xs text-slate-500 mt-1">Assigned</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-red-500">{vacant}</div>
-          <div className="text-xs text-slate-500 mt-1">Vacant</div>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        {[
+          { label: "Total Days", value: entries.length, color: "text-brand-600", bg: "bg-brand-50" },
+          { label: "Assigned", value: assigned, color: "text-emerald-600", bg: "bg-emerald-50" },
+          { label: "Vacant", value: vacant, color: "text-rose-600", bg: "bg-rose-50" }
+        ].map((stat, i) => (
+          <div key={i} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div>
+              <div className={clsx("text-3xl font-black tracking-tight mb-1", stat.color)}>{stat.value}</div>
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">{stat.label}</div>
+            </div>
+            <div className={clsx("w-1.5 h-10 rounded-full", stat.bg)} />
+          </div>
+        ))}
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
-          <h2 className="font-semibold text-slate-700 text-sm">Duty Roster - {format(current, 'MMMM yyyy')}</h2>
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <h2 className="font-bold text-slate-800 text-sm">Duty Roster - {format(current, 'MMMM yyyy')}</h2>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{entries.length} Entries</span>
         </div>
         {isLoading ? (
-          <div className="text-center py-10 text-slate-400">Loading...</div>
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
+             <RefreshCw className="w-8 h-8 animate-spin text-brand-400" />
+             <span className="text-sm font-medium">Loading roster data...</span>
+          </div>
         ) : entries.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">No roster data. Click "Sync & Generate Roster" to start.</div>
+          <div className="text-center py-20 text-slate-400">
+            <p className="text-sm font-medium mb-1">No roster data found for this month.</p>
+            <p className="text-xs">Click "Sync & Generate Roster" above to initialize assignments.</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-                  <th className="px-3 py-2 text-left font-semibold">Date</th>
-                  <th className="px-3 py-2 text-left font-semibold">Day</th>
-                  <th className="px-3 py-2 text-left font-semibold">Type</th>
-                  <th className="px-3 py-2 text-left font-semibold">Duty</th>
-                  <th className="px-3 py-2 text-left font-semibold">Standby</th>
-                  <th className="px-3 py-2 text-left font-semibold">Status</th>
+                <tr className="bg-slate-50/80 text-slate-400 text-[10px] uppercase tracking-widest font-bold">
+                  <th className="px-6 py-4 text-left">Date</th>
+                  <th className="px-6 py-4 text-left">Day</th>
+                  <th className="px-6 py-4 text-left">Type</th>
+                  <th className="px-6 py-4 text-left">Primary Duty</th>
+                  <th className="px-6 py-4 text-left">Standby</th>
+                  <th className="px-6 py-4 text-left">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {entries.map(e => (
-                  <tr
-                    key={e.id}
-                    className={clsx(
-                      'transition-colors',
-                      e.day_type === 'working' ? 'hover:bg-emerald-50' :
-                      e.day_type === 'holiday' ? 'hover:bg-red-50' : 'hover:bg-orange-50',
-                    )}
-                  >
-                    <td className="px-3 py-2 font-medium text-slate-700">{format(new Date(`${e.date}T00:00:00`), 'dd MMM')}</td>
-                    <td className="px-3 py-2 text-slate-500">{format(new Date(`${e.date}T00:00:00`), 'EEE')}</td>
-                    <td className="px-3 py-2">{dayTypeBadge(e)}</td>
-                    <td className="px-3 py-2 font-medium" title={e.duty_staff?.name}>{e.duty_staff ? staffLabel(e.duty_staff) : <span className="text-slate-300">-</span>}</td>
-                    <td className="px-3 py-2 text-slate-500" title={e.standby_staff?.name}>{e.standby_staff ? staffLabel(e.standby_staff) : <span className="text-slate-300">-</span>}</td>
-                    <td className="px-3 py-2">{statusBadge(e)}</td>
+                  <tr key={e.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-3.5 font-bold text-slate-900">{format(new Date(`${e.date}T00:00:00`), 'dd MMM')}</td>
+                    <td className="px-6 py-3.5 text-slate-500 font-medium">{format(new Date(`${e.date}T00:00:00`), 'EEEE')}</td>
+                    <td className="px-6 py-3.5">{dayTypeBadge(e)}</td>
+                    <td className="px-6 py-3.5 font-bold text-slate-800" title={e.duty_staff?.name}>
+                        {e.duty_staff ? (
+                            <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded bg-brand-100 text-brand-700 flex items-center justify-center text-[10px] font-black">
+                                    {staffLabel(e.duty_staff).slice(0, 1)}
+                                </div>
+                                {staffLabel(e.duty_staff)}
+                            </div>
+                        ) : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-6 py-3.5 text-slate-500 font-semibold" title={e.standby_staff?.name}>
+                        {e.standby_staff ? (
+                            <div className="flex items-center gap-2">
+                                <div className="w-5 h-5 rounded bg-slate-100 text-slate-500 flex items-center justify-center text-[9px] font-black">
+                                    {staffLabel(e.standby_staff).slice(0, 1)}
+                                </div>
+                                {staffLabel(e.standby_staff)}
+                            </div>
+                        ) : <span className="text-slate-200">—</span>}
+                    </td>
+                    <td className="px-6 py-3.5">{statusBadge(e)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -201,28 +222,28 @@ export default function RosterPage() {
         )}
       </div>
 
-      <div className="card space-y-3">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
         <div>
-          <h2 className="text-sm font-semibold text-slate-700">Manual Swap</h2>
-          <p className="text-xs text-slate-500 mt-1">Swap two already assigned dates mid-month and record the reason for transparency.</p>
+          <h2 className="font-bold text-slate-800 text-sm">Manual Duty Swap</h2>
+          <p className="text-xs text-slate-500 mt-1">Interchange assignments between two dates. This triggers a validation of availability rules.</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <select className="input" value={firstSwapDate} onChange={e => setFirstSwapDate(e.target.value)}>
-            <option value="">First date</option>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <select className="input rounded-xl border-slate-200" value={firstSwapDate} onChange={e => setFirstSwapDate(e.target.value)}>
+            <option value="">Select First date</option>
             {entries.filter(e => e.assigned_duty_id).map(e => (
-              <option key={`first-${e.date}`} value={e.date}>{format(new Date(`${e.date}T00:00:00`), 'dd MMM yyyy')} - {e.duty_staff ? staffLabel(e.duty_staff) : ''}</option>
+              <option key={`first-${e.date}`} value={e.date}>{format(new Date(`${e.date}T00:00:00`), 'dd MMM')} - {e.duty_staff ? staffLabel(e.duty_staff) : ''}</option>
             ))}
           </select>
-          <select className="input" value={secondSwapDate} onChange={e => setSecondSwapDate(e.target.value)}>
-            <option value="">Second date</option>
+          <select className="input rounded-xl border-slate-200" value={secondSwapDate} onChange={e => setSecondSwapDate(e.target.value)}>
+            <option value="">Select Second date</option>
             {entries.filter(e => e.assigned_duty_id && e.date !== firstSwapDate).map(e => (
-              <option key={`second-${e.date}`} value={e.date}>{format(new Date(`${e.date}T00:00:00`), 'dd MMM yyyy')} - {e.duty_staff ? staffLabel(e.duty_staff) : ''}</option>
+              <option key={`second-${e.date}`} value={e.date}>{format(new Date(`${e.date}T00:00:00`), 'dd MMM')} - {e.duty_staff ? staffLabel(e.duty_staff) : ''}</option>
             ))}
           </select>
-          <input className="input" placeholder="Reason for swap" value={swapReason} onChange={e => setSwapReason(e.target.value)} />
+          <input className="input rounded-xl border-slate-200" placeholder="Reason for swap (optional)" value={swapReason} onChange={e => setSwapReason(e.target.value)} />
         </div>
-        <button onClick={() => swapMut.mutate()} disabled={!firstSwapDate || !secondSwapDate || swapMut.isPending} className="btn-secondary">
-          {swapMut.isPending ? 'Swapping...' : 'Swap Duties'}
+        <button onClick={() => swapMut.mutate()} disabled={!firstSwapDate || !secondSwapDate || swapMut.isPending} className="btn-secondary px-6 rounded-xl font-bold">
+          {swapMut.isPending ? 'Processing Swap...' : 'Execute Swap'}
         </button>
       </div>
 

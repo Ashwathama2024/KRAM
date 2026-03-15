@@ -44,6 +44,15 @@
   }
 }
 
+/* Typography */
+.kram-wordmark {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+}
+.kram-tagline {
+  font-family: 'Marcellus', serif;
+}
+
 /* Calendar cell highlight */
 .cal-working  { @apply bg-emerald-50 hover:bg-emerald-100; }
 .cal-weekend  { @apply bg-orange-50 hover:bg-orange-100; }
