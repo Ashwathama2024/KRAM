@@ -1,0 +1,33 @@
+version: "3.9"
+
+# PostgreSQL override — use with: docker compose -f docker-compose.yml -f docker/docker-compose.postgres.yml up
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: dutysync_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dutysync
+      POSTGRES_USER: dutysync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dutysync_secure_pw}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - dutysync_net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dutysync"]
+      interval: 10s
+      retries: 5
+
+  backend:
+    environment:
+      - DATABASE_URL=postgresql://dutysync:${POSTGRES_PASSWORD:-dutysync_secure_pw}@db:5432/dutysync
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

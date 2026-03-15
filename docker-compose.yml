@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dutysync_backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite:////app/data/dutysync.db
+    volumes:
+      - dutysync_data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dutysync_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dutysync_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - dutysync_net
+
+volumes:
+  dutysync_data:
+    driver: local
+
+networks:
+  dutysync_net:
+    driver: bridge
