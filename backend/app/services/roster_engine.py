@@ -175,7 +175,7 @@ def _had_sunday_last_month(staff: Staff, d: date, db: Session) -> bool:
 
 
 def _had_duty_previous_day(staff: Staff, d: date, db: Session) -> bool:
-    return _has_gap_conflict(db, staff.id, d, ignore_dates={d})
+    return _has_gap_conflict(db, staff.id, d, ignore_dates={d}, include_standby=False)
 
 
 def _has_gap_conflict(
@@ -228,10 +228,13 @@ def _get_start_index_for_pool(
         return 0
 
     last_entry = relevant_entries[-1]
+    
+    # Priority 1: Next Duty should be the last Standby (if Standby was assigned and exists)
     standby_idx = _find_staff_index(staff_pool, last_entry.assigned_standby_id)
     if standby_idx is not None:
         return standby_idx
 
+    # Priority 2: If no Standby was assigned, just pick the next index after the last Duty
     duty_idx = _find_staff_index(staff_pool, last_entry.assigned_duty_id)
     if duty_idx is None:
         return 0
@@ -275,82 +278,96 @@ def _recompute_staff_counters(db: Session):
             staff.total_working_duties += 1
 
 
-def _pick_duty(
+def _pick_duty_and_standby(
     staff_pool: List[Staff],
     start_index: int,
     d: date,
     db: Session,
     debt_attr: str,
     month_counts: dict[int, int],
-) -> Tuple[Optional[Staff], int, int]:
+) -> Tuple[Optional[Staff], Optional[Staff], int, int]:
+    """Returns (Duty_Candidate, Standby_Candidate, Next_Queue_Idx, Skipped_Staff_Count)"""
     if not staff_pool:
-        return None, start_index, 0
+        return None, None, start_index, 0
 
     n = len(staff_pool)
     skipped = 0
     skipped_unavailable = []
-    sunday_repeat_candidates = []
-    eligible_candidates: List[Tuple[Staff, int, int]] = []
-
+    
+    # 1. FIND DUTY
+    duty_candidate = None
+    duty_idx = -1
+    
     for offset in range(n):
         idx = (start_index + offset) % n
         candidate = staff_pool[idx]
+        
         if not candidate.active:
             skipped += 1
             continue
+            
         if not _is_staff_available(candidate, d, db):
             skipped += 1
             skipped_unavailable.append(candidate)
             continue
+            
         if _had_duty_previous_day(candidate, d, db):
+            # 24-hour gap rule prevents Duty->Duty (Standby doesn't trigger this here because it uses ignore_standby=False optionally, 
+            # but _had_duty_previous_day checks if they specifically did Duty. Note that the original logic included both).
+            # We strictly enforce 24hr gap.
             skipped += 1
             continue
-        if _had_sunday_last_month(candidate, d, db):
-            sunday_repeat_candidates.append((candidate, idx, offset))
+            
+        # We found our Duty!
+        duty_candidate = candidate
+        duty_idx = idx
+        break
+
+    if not duty_candidate:
+        # Resolve debts for skipped people
+        for staff in skipped_unavailable:
+            setattr(staff, debt_attr, getattr(staff, debt_attr, 0) + 1)
+            staff.duty_debt = getattr(staff, "working_debt", 0) + getattr(staff, "holiday_debt", 0)
+        return None, None, start_index, skipped
+
+    # 2. FIND STANDBY
+    # Start looking strictly after the duty_idx
+    standby_candidate = None
+    standby_idx = -1
+    standby_start = (duty_idx + 1) % n
+    
+    for offset in range(n):
+        idx = (standby_start + offset) % n
+        candidate = staff_pool[idx]
+        
+        # Don't pick the same person as Duty
+        if candidate.id == duty_candidate.id:
             continue
-        eligible_candidates.append((candidate, idx, offset))
+            
+        if not candidate.active:
+            continue
+            
+        if not _is_staff_available(candidate, d, db):
+            continue
+            
+        # Gap Rule Check for Standby (Standby must also not violate the gap rule)
+        if _has_gap_conflict(db, candidate.id, d, ignore_dates={d}, include_standby=True):
+            continue
+            
+        standby_candidate = candidate
+        standby_idx = idx
+        break
 
-    if eligible_candidates:
-        chosen, idx, _ = eligible_candidates[0]
-        if _is_comfortable_month(d, db):
-            min_count = min(month_counts.get(candidate.id, 0) for candidate, _, _ in eligible_candidates)
-            chosen_count = month_counts.get(chosen.id, 0)
-            if chosen_count - min_count >= 2:
-                balanced_candidates = [
-                    (candidate, cand_idx, cand_offset)
-                    for candidate, cand_idx, cand_offset in eligible_candidates
-                    if month_counts.get(candidate.id, 0) == min_count
-                ]
-                if balanced_candidates:
-                    replacement, replacement_idx, _ = balanced_candidates[0]
-                    if replacement.id != chosen.id:
-                        _log_remark(
-                            db,
-                            f"{chosen.name} was softly shifted on {d.strftime('%b %d')} to balance duties; {replacement.name} was assigned instead.",
-                            "info",
-                            d,
-                        )
-                        chosen = replacement
-                        idx = replacement_idx
+    # If we couldn't find a standby that passes the gap rule, it will stay None.
+    # The next day's start idx should optimally be the Standby. If Standby is None, it's duty + 1
+    next_start_idx = standby_idx if standby_candidate else (duty_idx + 1) % n
 
-        for staff in skipped_unavailable:
-            setattr(staff, debt_attr, getattr(staff, debt_attr, 0) + 1)
-            staff.duty_debt = getattr(staff, "working_debt", 0) + getattr(staff, "holiday_debt", 0)
-
-        return chosen, (idx + 1) % n, skipped
-
-    if sunday_repeat_candidates:
-        candidate, idx, _ = sunday_repeat_candidates[0]
-        for staff in skipped_unavailable:
-            setattr(staff, debt_attr, getattr(staff, debt_attr, 0) + 1)
-            staff.duty_debt = getattr(staff, "working_debt", 0) + getattr(staff, "holiday_debt", 0)
-        return candidate, (idx + 1) % n, skipped
-
+    # Record debts for those skipped to get Duty
     for staff in skipped_unavailable:
         setattr(staff, debt_attr, getattr(staff, debt_attr, 0) + 1)
         staff.duty_debt = getattr(staff, "working_debt", 0) + getattr(staff, "holiday_debt", 0)
 
-    return None, start_index, skipped
+    return duty_candidate, standby_candidate, next_start_idx, skipped
 
 
 def _build_month_staff_counts(entries: List[Calendar]) -> Dict[int, dict]:
@@ -503,6 +520,7 @@ def _rebalance_working_month(db: Session, year: int, month: int):
                 continue
 
             entry.assigned_duty_id = receiver.id
+            entry.assigned_standby_id = None
             entry.status = StatusEnum.MODIFIED
             entry.remarks = (
                 f"Balanced working-day reassignment from {donor.name} to {receiver.name}."
@@ -581,6 +599,7 @@ def _rebalance_non_working_month(db: Session, year: int, month: int):
                 continue
 
             entry.assigned_duty_id = receiver.id
+            entry.assigned_standby_id = None
             entry.status = StatusEnum.MODIFIED
             entry.remarks = (
                 f"Balanced non-working reassignment from {donor.name} to {receiver.name}."
@@ -665,6 +684,7 @@ def _rebalance_month_totals(db: Session, year: int, month: int):
                     continue
 
                 entry.assigned_duty_id = receiver.id
+                entry.assigned_standby_id = None
                 entry.status = StatusEnum.MODIFIED
                 entry.remarks = (
                     f"Balanced total-duty reassignment from {donor.name} to {receiver.name}."
@@ -739,7 +759,7 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
                 entry.date,
             )
 
-        duty_staff, next_idx, skipped = _pick_duty(
+        duty_staff, standby_staff, next_idx, skipped = _pick_duty_and_standby(
             staff_pool,
             current_idx,
             entry.date,
@@ -764,7 +784,7 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
             )
 
         entry.assigned_duty_id = duty_staff.id
-        entry.assigned_standby_id = None
+        entry.assigned_standby_id = standby_staff.id if standby_staff else None
         entry.status = StatusEnum.ASSIGNED
         entry.remarks = None
 
@@ -786,6 +806,10 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
 
 
 def _assign_standby_for_range(db: Session, start_date: date, end_date: date):
+    # This logic is no longer strictly used as a post-generation pass because 
+    # Standby is decided atomically with Duty to enforce the "Tomorrow's Duty = Today's Standby" chain.
+    # However, if swap adjustments happen and we clear standbys, we can heal them here.
+    # Missing standbys can be manually re-healed by fetching the next available person.
     db.flush()
     entries = db.query(Calendar).filter(
         Calendar.date >= start_date,
@@ -799,17 +823,19 @@ def _assign_standby_for_range(db: Session, start_date: date, end_date: date):
         if not entry.assigned_duty_id:
             entry.assigned_standby_id = None
             continue
-        staff_pool = holiday_staff if _is_non_working(entry.day_type) else working_staff
-        standby_id = _pick_standby_for_entry(db, entry, staff_pool)
-        entry.assigned_standby_id = standby_id
-        db.flush()
-        if standby_id is None:
-            _log_remark(
-                db,
-                f"No eligible standby available on {entry.date}.",
-                "error",
-                entry.date,
-            )
+        
+        if not entry.assigned_standby_id:
+            staff_pool = holiday_staff if _is_non_working(entry.day_type) else working_staff
+            standby_id = _pick_standby_for_entry(db, entry, staff_pool)
+            entry.assigned_standby_id = standby_id
+            db.flush()
+            if standby_id is None:
+                _log_remark(
+                    db,
+                    f"No eligible standby available on {entry.date}.",
+                    "error",
+                    entry.date,
+                )
 
 
 def _latest_generated_month(db: Session) -> Optional[Tuple[int, int]]:
