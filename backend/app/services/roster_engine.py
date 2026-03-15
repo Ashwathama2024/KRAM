@@ -1,22 +1,44 @@
 """
-DutySync Master - Roster Generation Engine (Chain-based)
+DutySync Master - Roster Generation Engine
 
-Core logic
-----------
+Design
+------
 Two independent rotating chains:
   • Working chain   — weekdays (Mon–Fri)
   • Holiday chain   — weekends + public holidays
 
-Each chain advances by one position every day it is used:
-  today's standby → tomorrow's duty
+Chain rule: today's standby → tomorrow's duty (within the same queue).
 
-If the scheduled duty person is unavailable the chain skips them
-(duty_debt is incremented) and the next available person becomes duty.
-The person after that becomes standby.  This is the "standby closes
-up on duty" rule: whoever would have been standby naturally steps up.
+Look-ahead standby rule
+~~~~~~~~~~~~~~~~~~~~~~~
+Before a candidate is accepted as standby for Day D we verify they are
+also available for Day D+1 in the *same queue* — the day they would
+be expected to step up as duty.  This ensures the chain never breaks
+due to predictable leave:
+
+  Monday standby  → must be available Tuesday (next working day)
+  Friday standby  → must be available Monday (next working day)
+  Saturday standby → must be available Sunday (next non-working day)
+
+If every candidate would fail the look-ahead check we fall back to
+assigning the best available standby without look-ahead (chain will
+break at that point, logged as a remark).
+
+No-vacant guarantee
+~~~~~~~~~~~~~~~~~~~
+Duty selection walks the chain respecting full availability + buffer
+rules.  If everyone fails, a second pass ignores the rejoin buffer.
+As an absolute last resort the active person with the fewest duties
+is force-assigned so the day is never left vacant.
+
+Fairness
+~~~~~~~~
+The chain distributes duties with natural variance ≤ 1 when all staff
+are available.  Duty debt is accumulated for staff skipped due to
+unavailability and tracked on the Staff model for audit purposes.
 """
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 import calendar as cal_module
 import logging
 
@@ -45,12 +67,11 @@ def _log_remark(
     level: str = "info",
     date_ref: Optional[date] = None,
 ):
-    exists = db.query(RemarkLog).filter(
+    if not db.query(RemarkLog).filter(
         RemarkLog.message == message,
         RemarkLog.level == level,
         RemarkLog.date_ref == date_ref,
-    ).first()
-    if not exists:
+    ).first():
         db.add(RemarkLog(message=message, level=level, date_ref=date_ref))
 
 
@@ -97,8 +118,24 @@ def _get_active_staff(db: Session) -> List[Staff]:
     return db.query(Staff).filter(Staff.active == True).order_by(Staff.id).all()
 
 
-def _is_staff_available(staff: Staff, d: date, db: Session) -> bool:
-    """Return True if the staff member can work on date d."""
+# ── availability (leave + buffer logic) ──────────────────────────────────────
+
+def _is_staff_available(
+    staff: Staff,
+    d: date,
+    db: Session,
+    ignore_rejoin_buffer: bool = False,
+) -> bool:
+    """
+    Return True if the staff member can be assigned on date d.
+
+    Checks (in order):
+    1. join_date / relieve_date window
+    2. Direct leave / official-duty overlap
+    3. Rejoin buffer after leave or official duty (skipped when
+       ignore_rejoin_buffer=True — used only as a last-resort fallback
+       to prevent vacant days)
+    """
     if getattr(staff, "join_date", None) and d < staff.join_date:
         return False
     if getattr(staff, "relieve_date", None) and d > staff.relieve_date:
@@ -112,7 +149,10 @@ def _is_staff_available(staff: Staff, d: date, db: Session) -> bool:
     ).first():
         return False
 
-    # Rejoin buffer after leave / official duty
+    if ignore_rejoin_buffer:
+        return True
+
+    # Rejoin buffer after each past leave / official-duty record
     settings = _get_settings(db)
     for rec in db.query(Availability).filter(
         Availability.staff_id == staff.id,
@@ -133,9 +173,9 @@ def _is_staff_available(staff: Staff, d: date, db: Session) -> bool:
     return True
 
 
-def _find_staff_index(
-    staff_list: List[Staff], staff_id: Optional[int]
-) -> Optional[int]:
+# ── chain helpers ─────────────────────────────────────────────────────────────
+
+def _find_staff_index(staff_list: List[Staff], staff_id: Optional[int]) -> Optional[int]:
     if staff_id is None:
         return None
     for i, s in enumerate(staff_list):
@@ -162,15 +202,31 @@ def _get_chain_start(
     if not relevant:
         return 0
     last = relevant[-1]
-    # Standby of last day → first candidate for next day
     idx = _find_staff_index(staff_pool, last.assigned_standby_id)
     if idx is not None:
         return idx
-    # Fallback: position after last duty
     duty_idx = _find_staff_index(staff_pool, last.assigned_duty_id)
     if duty_idx is None:
         return 0
     return (duty_idx + 1) % len(staff_pool)
+
+
+def _find_next_queue_date(d: date, is_non_working: bool, db: Session) -> Optional[date]:
+    """
+    Return the next calendar date in the same queue (working or non-working)
+    after d.  Looks up to 14 days ahead.
+
+    A day is non-working if it is a weekend OR has is_holiday=True.
+    """
+    check = d + timedelta(days=1)
+    for _ in range(14):
+        entry = db.query(Calendar).filter(Calendar.date == check).first()
+        # Determine queue type: is_holiday flag takes priority
+        day_is_nw = (entry.is_holiday if entry else False) or _is_weekend(check)
+        if day_is_nw == is_non_working:
+            return check
+        check += timedelta(days=1)
+    return None
 
 
 # ── chain picker ──────────────────────────────────────────────────────────────
@@ -181,17 +237,12 @@ def _pick_from_chain(
     d: date,
     db: Session,
     exclude_id: Optional[int] = None,
+    ignore_rejoin_buffer: bool = False,
 ) -> Tuple[Optional[Staff], int, List[Staff]]:
     """
     Walk the chain from start_idx and return the first available person.
 
-    Parameters
-    ----------
-    exclude_id : skip this staff id (used to prevent standby == duty).
-
-    Returns
-    -------
-    (person, their_index_in_pool, list_of_skipped_unavailable_staff)
+    Returns (person, their_pool_index, list_of_skipped_unavailable_staff).
     """
     n = len(staff_pool)
     if not n:
@@ -204,11 +255,57 @@ def _pick_from_chain(
             continue
         if exclude_id is not None and candidate.id == exclude_id:
             continue
-        if not _is_staff_available(candidate, d, db):
+        if not _is_staff_available(candidate, d, db, ignore_rejoin_buffer):
             skipped.append(candidate)
             continue
         return candidate, idx, skipped
     return None, start_idx, skipped
+
+
+def _pick_standby_with_lookahead(
+    staff_pool: List[Staff],
+    start_idx: int,
+    duty_idx: int,
+    d: date,
+    next_queue_date: Optional[date],
+    db: Session,
+) -> Tuple[Optional[Staff], int, bool]:
+    """
+    Pick the next standby candidate who:
+      1. Is available on Day D  (the assignment day)
+      2. Is available on Day D+1 in the same queue (look-ahead)
+
+    Returns (standby, their_index, look_ahead_was_satisfied).
+
+    If every candidate fails the look-ahead check, a second pass is made
+    ignoring it so the day is never left without a standby.
+    """
+    n = len(staff_pool)
+
+    def _try(with_lookahead: bool):
+        for offset in range(n):
+            idx = (start_idx + offset) % n
+            if idx == duty_idx:
+                continue
+            candidate = staff_pool[idx]
+            if not candidate.active:
+                continue
+            if not _is_staff_available(candidate, d, db):
+                continue
+            if with_lookahead and next_queue_date:
+                if not _is_staff_available(candidate, next_queue_date, db):
+                    continue
+            return candidate, idx
+        return None, start_idx
+
+    # Primary: with look-ahead
+    standby, standby_idx = _try(with_lookahead=True)
+    if standby is not None:
+        return standby, standby_idx, True
+
+    # Fallback: without look-ahead (chain may break but no vacant standby)
+    standby, standby_idx = _try(with_lookahead=False)
+    return standby, standby_idx, False
 
 
 # ── month helpers ─────────────────────────────────────────────────────────────
@@ -254,14 +351,22 @@ def _recompute_staff_counters(db: Session):
 
 def _generate_month_main_duties(db: Session, year: int, month: int):
     """
-    Generate duty + standby for every calendar day in the month using the
-    two-chain rule:
+    Generate duty + standby for every calendar day in the month.
 
-      working chain   → advances on every weekday
-      holiday chain   → advances on every weekend / public holiday
+    Duty selection (in order of preference)
+    ----------------------------------------
+    1. Normal chain walk — full availability + buffer checks.
+    2. Fallback chain walk — ignores rejoin buffer (prevents vacancy
+       when everyone is in their post-leave cooldown period).
+    3. Force-assign — picks the active person with the fewest total
+       duties.  Logged as a forced assignment.  Guarantees no vacant day.
 
-    Chain advance: after each assignment, the pointer moves to the standby's
-    index so that standby-today == duty-tomorrow (within the same chain).
+    Standby selection (look-ahead)
+    --------------------------------
+    Standby candidates are first filtered by availability on BOTH
+    Day D *and* Day D+1 in the same queue (look-ahead).  If no
+    candidate passes the look-ahead check, any available person is
+    used and the near-miss is logged so operators can see it.
     """
     start_date, end_date = _month_bounds(year, month)
     all_staff = _get_active_staff(db)
@@ -272,7 +377,6 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
 
     initialize_month(db, year, month)
 
-    # Clear this month's assignments
     db.query(Calendar).filter(
         Calendar.date >= start_date,
         Calendar.date <= end_date,
@@ -284,7 +388,7 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
     })
     db.commit()
 
-    # Determine chain start positions from all prior months
+    # Chain start positions from all prior months
     historical = db.query(Calendar).filter(
         Calendar.date < start_date,
         Calendar.assigned_duty_id.isnot(None),
@@ -312,15 +416,51 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
         )
 
         if duty is None:
+            # Fallback: ignore rejoin buffer
+            duty, duty_idx, skipped = _pick_from_chain(
+                all_staff, current_idx, entry.date, db,
+                ignore_rejoin_buffer=True,
+            )
+            if duty is not None:
+                _log_remark(
+                    db,
+                    f"Duty on {entry.date}: rejoin buffer relaxed to prevent vacancy.",
+                    "warning",
+                    entry.date,
+                )
+
+        if duty is None:
+            # Last resort: force-assign least-burdened active person
+            candidates = sorted(
+                [s for s in all_staff if s.active],
+                key=lambda s: (
+                    getattr(s, "total_working_duties", 0)
+                    + getattr(s, "total_holiday_duties", 0)
+                ),
+            )
+            if candidates:
+                duty = candidates[0]
+                duty_idx = _find_staff_index(all_staff, duty.id) or 0
+                skipped = []
+                _log_remark(
+                    db,
+                    f"Duty on {entry.date} force-assigned to {duty.name} "
+                    f"(no eligible staff — forced to prevent vacancy).",
+                    "warning",
+                    entry.date,
+                )
+
+        if duty is None:
+            # Truly no active staff — should never happen in practice
             entry.status = StatusEnum.VACANT
-            entry.remarks = "No eligible staff available"
+            entry.remarks = "No active staff available"
             _log_remark(
-                db, f"No eligible staff on {entry.date}.", "error", entry.date
+                db, f"No active staff on {entry.date}.", "error", entry.date
             )
             db.flush()
             continue
 
-        # Increment debt for staff skipped due to unavailability
+        # Track debt for staff skipped due to unavailability
         for s in skipped:
             setattr(s, debt_attr, getattr(s, debt_attr, 0) + 1)
             s.duty_debt = (
@@ -335,18 +475,27 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
                 entry.date,
             )
 
-        # ── 2. Find STANDBY (next in chain after duty) ─────────────────────
-        standby, standby_idx, _ = _pick_from_chain(
-            all_staff,
-            (duty_idx + 1) % n,
-            entry.date,
-            db,
-            exclude_id=duty.id,
+        # ── 2. Find STANDBY (with look-ahead) ──────────────────────────────
+        next_queue_date = _find_next_queue_date(entry.date, is_nw, db)
+        standby_start = (duty_idx + 1) % n
+
+        standby, standby_idx, lookahead_ok = _pick_standby_with_lookahead(
+            all_staff, standby_start, duty_idx, entry.date, next_queue_date, db
         )
+
         if standby is None and n > 1:
             _log_remark(
                 db,
                 f"No eligible standby on {entry.date}.",
+                "warning",
+                entry.date,
+            )
+        elif not lookahead_ok and standby is not None:
+            _log_remark(
+                db,
+                f"Look-ahead skipped on {entry.date}: {standby.name} assigned as "
+                f"standby but may be unavailable on {next_queue_date} "
+                f"(chain continuity not guaranteed).",
                 "warning",
                 entry.date,
             )
@@ -365,7 +514,9 @@ def _generate_month_main_duties(db: Session, year: int, month: int):
             )
 
         # ── 4. Advance chain pointer ───────────────────────────────────────
-        # Chain rule: standby's index is the next duty start
+        # Chain: standby's index is the next duty start.
+        # If look-ahead was satisfied this equals the person who will
+        # be duty tomorrow.  If not, chain is noted as broken.
         next_idx = standby_idx if standby else (duty_idx + 1) % n
         if is_nw:
             holiday_idx = next_idx
@@ -390,7 +541,7 @@ def _latest_generated_month(db: Session) -> Optional[Tuple[int, int]]:
 
 
 def regenerate_from_month(db: Session, year: int, month: int):
-    """Re-generate this month (and any later already-generated months)."""
+    """Re-generate this month and any later already-generated months."""
     latest = _latest_generated_month(db)
     end_year, end_month = latest if latest else (year, month)
     if (end_year, end_month) < (year, month):
@@ -418,9 +569,10 @@ def generate_roster(
 
 def heal_roster(db: Session, year: int, month: int) -> List[Calendar]:
     """
-    Auto-heal: if a duty person is now unavailable, the chain skips them
-    and whoever would have been standby closes up on duty automatically.
-    This is achieved by simply regenerating from this month forward.
+    Auto-heal: regenerate so that:
+    • If a duty person is now unavailable, the chain skips them and the
+      next person (original standby) closes up on duty.
+    • Look-ahead ensures the new standby chain is also healthy.
     """
     today = date.today()
     start, end = _month_bounds(year, month)
@@ -486,8 +638,15 @@ def _reassign_standby(db: Session, entry: Calendar):
     all_staff = _get_active_staff(db)
     duty_idx = _find_staff_index(all_staff, entry.assigned_duty_id)
     start = 0 if duty_idx is None else (duty_idx + 1) % len(all_staff)
-    standby, _, _ = _pick_from_chain(
-        all_staff, start, entry.date, db, exclude_id=entry.assigned_duty_id
+    standby, _, _ = _pick_standby_with_lookahead(
+        all_staff, start, duty_idx or 0,
+        entry.date,
+        _find_next_queue_date(
+            entry.date,
+            _is_non_working(entry.day_type),
+            db,
+        ),
+        db,
     )
     entry.assigned_standby_id = standby.id if standby else None
 

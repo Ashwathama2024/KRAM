@@ -333,5 +333,233 @@ class TestStandbyCoversUnavailableDuty(ChainTestBase):
             )
 
 
+class TestLookAheadStandby(ChainTestBase):
+    """
+    Look-ahead rule: a candidate is refused as standby for Day D if they are
+    already known to be unavailable on Day D+1 in the same queue.
+    This keeps the chain unbroken even across leave blocks.
+    """
+
+    def test_standby_skipped_when_unavailable_next_queue_day(self):
+        """
+        Setup:
+          • 5 staff — A B C D E (ids 1-5)
+          • Generate May 2026 (no prior data → working chain starts at A)
+          • Working day sequence: May 1(Fri) May 4(Mon) May 5(Tue) …
+
+        Chain without leave:
+          May 1: A duty, B standby  → B becomes May 4 duty
+          May 4: B duty, C standby  → C becomes May 5 duty
+
+        Now add leave for C covering May 5 (next working day after May 4).
+        With look-ahead, C must be refused as standby on May 4.
+        So May 4 standby should NOT be C.
+        """
+        self._add_staff(["A", "B", "C", "D", "E"])
+
+        # Find what the third working day of May 2026 is
+        # May 4 is the second working day; May 5 is the third
+        # Add leave for C on May 5 BEFORE generation so look-ahead fires
+        staff_c = self.db.query(Staff).filter(Staff.name == "C").first()
+        may5 = date(2026, 5, 5)
+        self.db.add(Availability(
+            staff_id=staff_c.id,
+            start_date=may5,
+            end_date=may5,
+            availability_type=AvailabilityTypeEnum.LEAVE,
+        ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 5)
+
+        entries = _working(_month_entries(self.db, 2026, 5))
+        # May 4 is working[1] (0=May1 Fri, 1=May4 Mon, 2=May5 Tue …)
+        may4_entry = next(e for e in entries if e.date == date(2026, 5, 4))
+        # The standby on May 4 must NOT be C (who is on leave May 5)
+        self.assertNotEqual(
+            may4_entry.assigned_standby_id,
+            staff_c.id,
+            f"C is on leave May 5 but was assigned standby on May 4 "
+            f"(violates look-ahead rule)",
+        )
+
+    def test_chain_unbroken_across_leave_block_with_lookahead(self):
+        """
+        When look-ahead is satisfied, the chain from Day D to Day D+1
+        must remain intact even though the 'natural' next person has leave.
+        """
+        self._add_staff(["A", "B", "C", "D", "E"])
+
+        # Put C on leave for May 5 before generating
+        staff_c = self.db.query(Staff).filter(Staff.name == "C").first()
+        self.db.add(Availability(
+            staff_id=staff_c.id,
+            start_date=date(2026, 5, 5),
+            end_date=date(2026, 5, 5),
+            availability_type=AvailabilityTypeEnum.LEAVE,
+        ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 5)
+
+        working = _working(_month_entries(self.db, 2026, 5))
+        # Chain must hold for ALL consecutive working-day pairs
+        for i in range(len(working) - 1):
+            today = working[i]
+            tomorrow = working[i + 1]
+            self.assertEqual(
+                today.assigned_standby_id,
+                tomorrow.assigned_duty_id,
+                f"Chain broken at {today.date} → {tomorrow.date} "
+                f"(look-ahead should have prevented it)",
+            )
+
+    def test_lookahead_fallback_when_all_candidates_have_leave_next_day(self):
+        """
+        If every candidate except one has leave on Day D+1, the remaining
+        candidate is used as standby (even if look-ahead is not fully met
+        for others).  The day must not be left without a standby.
+        """
+        self._add_staff(["A", "B", "C"])
+        # Put B and C on leave on May 4 (the day after May 1 in working queue)
+        for name in ["B", "C"]:
+            s = self.db.query(Staff).filter(Staff.name == name).first()
+            self.db.add(Availability(
+                staff_id=s.id,
+                start_date=date(2026, 5, 4),
+                end_date=date(2026, 5, 4),
+                availability_type=AvailabilityTypeEnum.LEAVE,
+            ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 5)
+        working = _working(_month_entries(self.db, 2026, 5))
+        may1 = next(e for e in working if e.date == date(2026, 5, 1))
+
+        # Standby must still be assigned (no vacant standby)
+        self.assertIsNotNone(
+            may1.assigned_standby_id,
+            "Standby is None on May 1 even though at least one staff is available",
+        )
+
+
+class TestNoVacantDays(ChainTestBase):
+    """Every calendar day must have a duty assignment — no VACANT status."""
+
+    def test_no_vacant_with_heavy_leave(self):
+        """
+        Even when most staff are on leave, the force-assign fallback must
+        fill every day.
+        """
+        self._add_staff(["A", "B", "C", "D", "E"])
+        staff_list = self.db.query(Staff).order_by(Staff.id).all()
+
+        # Put 4 of 5 staff on leave for the entire month of July 2026
+        for s in staff_list[:4]:
+            self.db.add(Availability(
+                staff_id=s.id,
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 31),
+                availability_type=AvailabilityTypeEnum.LEAVE,
+            ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 7)
+
+        for entry in _month_entries(self.db, 2026, 7):
+            self.assertNotEqual(
+                entry.status.name, "VACANT",
+                f"{entry.date} is VACANT — no-vacant guarantee failed",
+            )
+            self.assertIsNotNone(
+                entry.assigned_duty_id,
+                f"{entry.date} has no duty assigned",
+            )
+
+    def test_no_vacant_with_all_on_leave_except_one(self):
+        """Single available person covers all days (last-resort force assign)."""
+        self._add_staff(["A", "B"])
+        # Put A on leave for entire month
+        staff_a = self.db.query(Staff).filter(Staff.name == "A").first()
+        self.db.add(Availability(
+            staff_id=staff_a.id,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 31),
+            availability_type=AvailabilityTypeEnum.LEAVE,
+        ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 8)
+
+        for entry in _month_entries(self.db, 2026, 8):
+            self.assertIsNotNone(
+                entry.assigned_duty_id,
+                f"{entry.date} has no duty — no-vacant guarantee failed",
+            )
+
+
+class TestLeaveAndBufferLogic(ChainTestBase):
+    """
+    Leave records prevent assignment during the leave period and for the
+    configured rejoin-buffer days afterwards.
+    """
+
+    def test_staff_not_assigned_during_leave(self):
+        self._add_staff(["A", "B", "C", "D", "E"])
+        staff_a = self.db.query(Staff).filter(Staff.name == "A").first()
+        leave_start = date(2026, 6, 8)
+        leave_end = date(2026, 6, 12)
+        self.db.add(Availability(
+            staff_id=staff_a.id,
+            start_date=leave_start,
+            end_date=leave_end,
+            availability_type=AvailabilityTypeEnum.LEAVE,
+        ))
+        self.db.commit()
+
+        generate_roster(self.db, 2026, 6)
+
+        for entry in _month_entries(self.db, 2026, 6):
+            if leave_start <= entry.date <= leave_end:
+                self.assertNotEqual(
+                    entry.assigned_duty_id,
+                    staff_a.id,
+                    f"A is on leave but assigned duty on {entry.date}",
+                )
+                self.assertNotEqual(
+                    entry.assigned_standby_id,
+                    staff_a.id,
+                    f"A is on leave but assigned standby on {entry.date}",
+                )
+
+    def test_rejoin_buffer_respected(self):
+        """
+        Staff should not be assigned within leave_rejoin_buffer_days after
+        their leave ends (default = 2 days).
+        """
+        self._add_staff(["A", "B", "C", "D", "E"])
+        staff_a = self.db.query(Staff).filter(Staff.name == "A").first()
+        leave_end = date(2026, 6, 10)
+        self.db.add(Availability(
+            staff_id=staff_a.id,
+            start_date=date(2026, 6, 8),
+            end_date=leave_end,
+            availability_type=AvailabilityTypeEnum.LEAVE,
+        ))
+        self.db.commit()
+
+        # Default buffer = 2 days → A should not appear on Jun 11 or Jun 12
+        generate_roster(self.db, 2026, 6)
+        buffer_dates = [leave_end + timedelta(days=i) for i in range(1, 3)]
+
+        for entry in _month_entries(self.db, 2026, 6):
+            if entry.date in buffer_dates:
+                self.assertNotEqual(
+                    entry.assigned_duty_id,
+                    staff_a.id,
+                    f"A is in rejoin buffer but assigned duty on {entry.date}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
