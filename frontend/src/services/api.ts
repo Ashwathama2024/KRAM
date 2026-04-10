@@ -1,8 +1,37 @@
-import axios from 'axios'
+import axios, { type AxiosError } from 'axios'
 
 const BASE = import.meta.env.VITE_API_URL || '/api'
 
 export const api = axios.create({ baseURL: BASE })
+
+/** Extract a user-friendly message from an Axios API error. */
+export function apiError(e: unknown, fallback = 'An unexpected error occurred'): string {
+  const err = e as AxiosError<{ detail?: string }>
+  return err?.response?.data?.detail || fallback
+}
+
+// Setup / Onboarding types
+export interface SetupStatus {
+  is_configured: boolean
+  has_staff: boolean
+  org_name: string | null
+  unit: string | null
+}
+
+export interface SetupStaffEntry {
+  name: string
+  active?: boolean
+  join_date?: string
+  relieve_date?: string
+}
+
+export interface SetupInitializePayload {
+  org_name: string
+  unit?: string
+  staff: SetupStaffEntry[]
+  leave_rejoin_buffer_days?: number
+  auto_assign_standby?: boolean
+}
 
 // Types
 export interface Staff {
@@ -17,6 +46,7 @@ export interface Staff {
   total_working_duties: number
   total_holiday_duties: number
   duty_debt: number
+  privilege_mode: boolean
   created_at?: string
 }
 
@@ -81,6 +111,30 @@ export interface Remark {
   created_at?: string
 }
 
+export interface ManualOverrideLog {
+  id: number
+  date: string
+  override_type: string
+  reason?: string
+  heal_applied: boolean
+  prev_duty_id?: number
+  prev_standby_id?: number
+  new_duty_id: number
+  new_standby_id?: number
+  prev_duty?: Staff
+  prev_standby?: Staff
+  new_duty?: Staff
+  new_standby?: Staff
+  created_at?: string
+}
+
+// Setup API
+export const setupApi = {
+  status: () => api.get<SetupStatus>('/setup/status').then(r => r.data),
+  initialize: (data: SetupInitializePayload) =>
+    api.post<SetupStatus>('/setup/initialize', data).then(r => r.data),
+}
+
 // Staff API
 export const staffApi = {
   list: () => api.get<Staff[]>('/staff/').then(r => r.data),
@@ -129,4 +183,14 @@ export const rosterApi = {
     `${BASE}/roster/export/csv?year=${year}&month=${month}`,
   exportPdf: (year: number, month: number) =>
     `${BASE}/roster/export/pdf?year=${year}&month=${month}`,
+  manualOverride: (data: {
+    date: string
+    new_duty_id: number
+    new_standby_id?: number
+    reason?: string
+    override_type: string
+    heal_after: boolean
+  }) => api.post<CalendarEntry[]>('/roster/manual-override', data).then(r => r.data),
+  overrideHistory: (limit = 50) =>
+    api.get<ManualOverrideLog[]>('/roster/manual-override/history', { params: { limit } }).then(r => r.data),
 }

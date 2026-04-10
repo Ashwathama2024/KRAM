@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// 8000 = uvicorn dev server; override with VITE_DEV_PROXY_TARGET for desktop build (port 8765)
 const apiProxyTarget = process.env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8000'
 
 export default defineConfig({

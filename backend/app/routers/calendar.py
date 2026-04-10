@@ -1,13 +1,33 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
+import calendar as cal_module
 from ..database import get_db
-from ..models.models import Calendar, DayTypeEnum
+from ..models.models import Calendar, DayTypeEnum, RosterSettings
 from ..schemas.schemas import CalendarOut, CalendarUpdate, HolidayMark
 from ..services.roster_engine import regenerate_from_month
+from ..services.export_service import export_calendar_pdf
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
+
+
+@router.get("/export/pdf")
+def export_calendar_pdf_route(year: int, month: int, db: Session = Depends(get_db)):
+    _, days = cal_module.monthrange(year, month)
+    entries = (
+        db.query(Calendar)
+        .filter(Calendar.date >= date(year, month, 1), Calendar.date <= date(year, month, days))
+        .order_by(Calendar.date)
+        .all()
+    )
+    settings = db.query(RosterSettings).first()
+    org_name = settings.org_name if settings and settings.org_name else ""
+    content = export_calendar_pdf(entries, month, year, org_name)
+    filename = f"KRAM-Calendar-{year}-{month:02d}.pdf"
+    return Response(content=content, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 @router.get("/", response_model=List[CalendarOut])
@@ -18,8 +38,6 @@ def list_calendar(
 ):
     q = db.query(Calendar)
     if year and month:
-        from datetime import date
-        import calendar as cal_module
         _, days = cal_module.monthrange(year, month)
         q = q.filter(
             Calendar.date >= date(year, month, 1),
@@ -80,7 +98,6 @@ def mark_holiday(payload: HolidayMark, db: Session = Depends(get_db)):
     if payload.is_holiday:
         entry.day_type = DayTypeEnum.HOLIDAY
     else:
-        from datetime import date as dt
         d = payload.date
         entry.day_type = DayTypeEnum.WEEKEND if d.weekday() >= 5 else DayTypeEnum.WORKING
     db.commit()

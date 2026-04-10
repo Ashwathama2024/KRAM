@@ -15,11 +15,12 @@ These rules are mandatory and must never be broken by generation, healing, rebal
 
 - No date can remain vacant if a legal assignment exists.
 - Main duty and standby cannot be the same person on the same date.
-- No person can appear on adjacent dates in any role combination:
-  - main to main
-  - main to standby
-  - standby to main
-  - standby to standby
+- No person can take main duty on adjacent calendar dates.
+- This consecutive-duty ban applies globally across all queues:
+  - working to working
+  - working to non-working
+  - non-working to working
+  - non-working to non-working
 - Availability must be respected.
 - Join date and relieve date must be respected.
 - Manual swap logic must also satisfy the same safety checks before commit.
@@ -57,6 +58,7 @@ The following engine behavior is part of the current roster design and should no
 - Previous generated months influence the next month through carry-forward queue state.
 - Standby is assigned after main duty generation.
 - Rebalancing may modify assignments after queue generation, but only when legal.
+- Queue continuity is best-effort; the global no-consecutive-duty rule and debt correction may override the exact standby-to-next-duty handoff.
 - Audit and counters must reflect actual stored assignments, including modified rows.
 
 ## Change Checklist

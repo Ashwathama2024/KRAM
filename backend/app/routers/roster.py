@@ -1,28 +1,43 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import date
+import calendar as cal_module
 from ..database import get_db
-from ..models.models import Calendar, RosterSettings, RemarkLog, SwapLog
+from ..models.models import Calendar, RosterSettings, RemarkLog, SwapLog, ManualOverrideLog
 from ..schemas.schemas import (
     CalendarOut, GenerateRosterRequest, RosterSettingsBase,
-    RosterSettingsOut, AuditReport, RemarkOut, SwapRequest, SwapLogOut
+    RosterSettingsOut, AuditReport, RemarkOut, SwapRequest, SwapLogOut,
+    ManualOverrideRequest, ManualOverrideLogOut, StaffStats, StaffOut,
 )
-from ..services.roster_engine import generate_roster, heal_roster, get_audit_report, swap_roster_dates
+from ..services.roster_engine import (
+    generate_roster, heal_roster, get_audit_report,
+    swap_roster_dates, apply_manual_override, get_override_history,
+)
 from ..services.export_service import export_csv, export_pdf
-import calendar as cal_module
 
 router = APIRouter(prefix="/roster", tags=["Roster"])
 
 
 @router.post("/generate", response_model=List[CalendarOut])
 def generate(payload: GenerateRosterRequest, db: Session = Depends(get_db)):
-    entries = generate_roster(db, payload.year, payload.month, payload.force_regenerate)
+    try:
+        entries = generate_roster(db, payload.year, payload.month, payload.force_regenerate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Roster generation failed: {exc}")
     return entries
 
 
 @router.post("/heal", response_model=List[CalendarOut])
 def heal(year: int, month: int, db: Session = Depends(get_db)):
-    entries = heal_roster(db, year, month)
+    try:
+        entries = heal_roster(db, year, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Heal failed: {exc}")
     return entries
 
 
@@ -30,7 +45,6 @@ def heal(year: int, month: int, db: Session = Depends(get_db)):
 def audit(year: int, month: int, db: Session = Depends(get_db)):
     report = get_audit_report(db, year, month)
 
-    from ..schemas.schemas import StaffStats, StaffOut
     stats_out = []
     for s in report["stats"]:
         stats_out.append(StaffStats(
@@ -72,7 +86,6 @@ def swap(payload: SwapRequest, db: Session = Depends(get_db)):
     year = payload.first_date.year
     month = payload.first_date.month
     _, days = cal_module.monthrange(year, month)
-    from datetime import date
     return db.query(Calendar).filter(
         Calendar.date >= date(year, month, 1),
         Calendar.date <= date(year, month, days),
@@ -108,10 +121,31 @@ def update_settings(payload: RosterSettingsBase, db: Session = Depends(get_db)):
     return s
 
 
+@router.post("/manual-override", response_model=List[CalendarOut])
+def manual_override(payload: ManualOverrideRequest, db: Session = Depends(get_db)):
+    try:
+        entries = apply_manual_override(
+            db,
+            payload.date,
+            payload.new_duty_id,
+            payload.new_standby_id,
+            payload.reason,
+            payload.override_type,
+            payload.heal_after,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return entries
+
+
+@router.get("/manual-override/history", response_model=List[ManualOverrideLogOut])
+def override_history(limit: int = 50, db: Session = Depends(get_db)):
+    return get_override_history(db, limit)
+
+
 @router.get("/export/csv")
 def export_csv_route(year: int, month: int, db: Session = Depends(get_db)):
     _, days = cal_module.monthrange(year, month)
-    from datetime import date
     entries = db.query(Calendar).filter(
         Calendar.date >= date(year, month, 1),
         Calendar.date <= date(year, month, days),
@@ -130,7 +164,6 @@ def export_csv_route(year: int, month: int, db: Session = Depends(get_db)):
 @router.get("/export/pdf")
 def export_pdf_route(year: int, month: int, db: Session = Depends(get_db)):
     _, days = cal_module.monthrange(year, month)
-    from datetime import date
     entries = db.query(Calendar).filter(
         Calendar.date >= date(year, month, 1),
         Calendar.date <= date(year, month, days),

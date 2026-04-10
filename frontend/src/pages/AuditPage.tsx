@@ -4,13 +4,15 @@ import { format, addMonths, subMonths } from 'date-fns'
 import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, BarChart3 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { rosterApi, type AuditReport } from '../services/api'
+import { currentMonthDate } from '../utils/date'
 import { staffLabel } from '../utils/staff'
 import clsx from 'clsx'
 
 export default function AuditPage() {
-  const [current, setCurrent] = useState(new Date())
+  const [current, setCurrent] = useState(() => currentMonthDate())
   const year = current.getFullYear()
   const month = current.getMonth() + 1
+  const isCurrentMonth = year === currentMonthDate().getFullYear() && month === currentMonthDate().getMonth() + 1
 
   const { data: report, isLoading, error } = useQuery<AuditReport>({
     queryKey: ['audit', year, month],
@@ -19,11 +21,31 @@ export default function AuditPage() {
   })
 
   const chartData = report?.stats.map(s => ({
-    name: staffLabel(s.staff),
+    name: s.staff.abbreviation || s.staff.name,   // short label for X-axis
+    fullName: s.staff.name,                        // full name shown in tooltip
     Working: s.working_duties,
     Holiday: s.holiday_duties,
     Total: s.total_duties,
   })) ?? []
+
+  // Custom tooltip: shows abbreviation header + full name subtitle
+  const ChartTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload?.length) return null
+    const full = chartData.find(d => d.name === label)?.fullName ?? label
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl shadow-lg px-4 py-3 text-xs">
+        <p className="font-black text-slate-800 text-sm">{label}</p>
+        {full !== label && <p className="text-slate-400 mb-2 text-[10px]">{full}</p>}
+        {payload.map((entry: any) => (
+          <div key={entry.dataKey} className="flex items-center gap-2 mt-1">
+            <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: entry.fill }} />
+            <span className="text-slate-500">{entry.dataKey}:</span>
+            <span className="font-bold text-slate-800">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -44,6 +66,18 @@ export default function AuditPage() {
           </span>
           <button onClick={() => setCurrent(addMonths(current, 1))} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
             <ChevronRight className="w-5 h-5" />
+          </button>
+          <button
+            onClick={() => setCurrent(currentMonthDate())}
+            disabled={isCurrentMonth}
+            className={clsx(
+              'ml-1 px-3 py-2 text-xs font-bold uppercase tracking-wide rounded-lg transition-colors border',
+              isCurrentMonth
+                ? 'text-slate-400 bg-slate-50 border-slate-100 cursor-not-allowed'
+                : 'text-brand-700 bg-brand-50 hover:bg-brand-100 border-brand-100'
+            )}
+          >
+            Current Month
           </button>
         </div>
       </div>
@@ -113,10 +147,7 @@ export default function AuditPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                   <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 600, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 10, fontWeight: 600, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-                    cursor={{ fill: '#f8fafc' }}
-                  />
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: '#f8fafc' }} />
                   <Legend iconType="circle" />
                   <Bar dataKey="Working" fill="#10b981" radius={[4, 4, 0, 0]} barSize={32} />
                   <Bar dataKey="Holiday" fill="#f59e0b" radius={[4, 4, 0, 0]} barSize={32} />
@@ -149,10 +180,10 @@ export default function AuditPage() {
                       <tr key={s.staff.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center text-[10px] font-black">
-                              {staffLabel(s.staff).slice(0, 1)}
+                            <div className="w-8 h-8 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center text-[10px] font-black tracking-tight">
+                              {(s.staff.abbreviation || s.staff.name).slice(0, 3)}
                             </div>
-                            <span className="font-bold text-slate-800" title={s.staff.name}>{staffLabel(s.staff)}</span>
+                            <span className="font-bold text-slate-800">{s.staff.name}</span>
                           </div>
                         </td>
                         <td className="px-6 py-4 text-center">

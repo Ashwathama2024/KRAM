@@ -4,17 +4,43 @@ import { format, addMonths, subMonths, endOfMonth } from 'date-fns'
 import { ChevronLeft, ChevronRight, RefreshCw, Download, FileText, Zap } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-import { rosterApi, calendarApi, availabilityApi, type CalendarEntry, type Remark } from '../services/api'
+import { rosterApi, calendarApi, availabilityApi, apiError, type CalendarEntry, type Remark } from '../services/api'
 import { staffLabel } from '../utils/staff'
+import { currentMonthDate } from '../utils/date'
+
+async function triggerDownload(url: string, filename: string) {
+  const tid = toast.loading('Preparing download…')
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`Server error ${res.status}: ${body.slice(0, 120)}`)
+    }
+    const blob = await res.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objectUrl)
+    toast.success('Downloaded', { id: tid })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Download failed'
+    toast.error(msg, { id: tid })
+  }
+}
 
 export default function RosterPage() {
-  const [current, setCurrent] = useState(new Date())
+  const [current, setCurrent] = useState(() => currentMonthDate())
   const [firstSwapDate, setFirstSwapDate] = useState('')
   const [secondSwapDate, setSecondSwapDate] = useState('')
   const [swapReason, setSwapReason] = useState('')
   const qc = useQueryClient()
   const year = current.getFullYear()
   const month = current.getMonth() + 1
+  const isCurrentMonth = year === currentMonthDate().getFullYear() && month === currentMonthDate().getMonth() + 1
 
   const { data: entries = [], isLoading } = useQuery({
     queryKey: ['calendar', year, month],
@@ -69,7 +95,7 @@ export default function RosterPage() {
       qc.invalidateQueries({ queryKey: ['audit', year, month] })
       qc.invalidateQueries({ queryKey: ['remarks'] })
     },
-    onError: (e: any) => toast.error(e?.response?.data?.detail || 'Failed to swap duties'),
+    onError: (e: unknown) => toast.error(apiError(e, 'Failed to swap duties')),
   })
 
   const statusBadge = (e: CalendarEntry) => {
@@ -93,6 +119,47 @@ export default function RosterPage() {
     .filter(a => a.start_date <= monthEnd && a.end_date >= monthStart)
     .sort((a, b) => a.start_date.localeCompare(b.start_date))
   const monthNotes = notes.filter(note => !note.date_ref || (note.date_ref >= monthStart && note.date_ref <= monthEnd))
+  const summaryBuckets = [
+    {
+      key: 'rebalance',
+      label: 'Duty Rebalanced',
+      tone: 'bg-blue-50 text-blue-700 border-blue-100',
+      count: monthNotes.filter(note => note.message.startsWith('Variance rebalance on')).length,
+    },
+    {
+      key: 'standby',
+      label: 'Standby Shifted',
+      tone: 'bg-amber-50 text-amber-700 border-amber-100',
+      count: monthNotes.filter(note => note.message.startsWith('Nearest queue standby')).length,
+    },
+    {
+      key: 'consecutive',
+      label: 'Consecutive Rule Hits',
+      tone: 'bg-slate-50 text-slate-700 border-slate-100',
+      count: monthNotes.filter(note => note.message.includes('blocked by consecutive-duty rule')).length,
+    },
+    {
+      key: 'exceptions',
+      label: 'Fallback Events',
+      tone: 'bg-rose-50 text-rose-700 border-rose-100',
+      count: monthNotes.filter(note =>
+        note.message.includes('force-assigned')
+        || note.message.includes('rejoin buffer relaxed')
+        || note.message.includes('Look-ahead skipped')
+        || note.message.includes('limited in')
+      ).length,
+    },
+  ].filter(bucket => bucket.count > 0)
+  const detailNotes = monthNotes
+    .filter(note =>
+      note.message.startsWith('Variance rebalance on')
+      || note.message.startsWith('Nearest queue standby')
+      || note.message.includes('force-assigned')
+      || note.message.includes('rejoin buffer relaxed')
+      || note.message.includes('Look-ahead skipped')
+      || note.message.includes('limited in')
+    )
+    .slice(0, 10)
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -114,6 +181,18 @@ export default function RosterPage() {
           <button onClick={() => setCurrent(addMonths(current, 1))} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-600">
             <ChevronRight className="w-5 h-5" />
           </button>
+          <button
+            onClick={() => setCurrent(currentMonthDate())}
+            disabled={isCurrentMonth}
+            className={clsx(
+              'ml-1 px-3 py-2 text-xs font-bold uppercase tracking-wide rounded-lg transition-colors border',
+              isCurrentMonth
+                ? 'text-slate-400 bg-slate-50 border-slate-100 cursor-not-allowed'
+                : 'text-brand-700 bg-brand-50 hover:bg-brand-100 border-brand-100'
+            )}
+          >
+            Current Month
+          </button>
         </div>
       </div>
 
@@ -133,12 +212,12 @@ export default function RosterPage() {
             {healMut.isPending ? 'Healing...' : 'Auto-Heal Roster'}
           </button>
           <div className="flex items-center gap-2 ml-auto">
-            <a href={rosterApi.exportCsv(year, month)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export CSV">
+            <button onClick={() => triggerDownload(rosterApi.exportCsv(year, month), `KRAM-Roster-${year}-${String(month).padStart(2,'0')}.csv`)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export CSV">
               <Download className="w-5 h-5" />
-            </a>
-            <a href={rosterApi.exportPdf(year, month)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export PDF">
+            </button>
+            <button onClick={() => triggerDownload(rosterApi.exportPdf(year, month), `KRAM-Roster-${year}-${String(month).padStart(2,'0')}.pdf`)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export PDF">
               <FileText className="w-5 h-5" />
-            </a>
+            </button>
           </div>
         </div>
       </div>
@@ -295,7 +374,7 @@ export default function RosterPage() {
                 <tbody className="divide-y divide-slate-100">
                   {audit.stats.map(row => (
                     <tr key={row.staff.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium text-slate-700" title={row.staff.name}>{staffLabel(row.staff)}</td>
+                      <td className="px-3 py-2 font-medium text-slate-700">{row.staff.name}</td>
                       <td className="px-3 py-2 text-center text-emerald-600">{row.working_duties}</td>
                       <td className="px-3 py-2 text-center text-orange-500">{row.holiday_duties}</td>
                       <td className="px-3 py-2 text-center font-semibold">{row.total_duties}</td>
@@ -315,15 +394,36 @@ export default function RosterPage() {
         {monthNotes.length === 0 ? (
           <div className="px-4 py-8 text-sm text-slate-400 text-center">No notes for this month.</div>
         ) : (
-          <div className="divide-y divide-slate-100">
-            {monthNotes.map((note: Remark) => (
-              <div key={note.id} className="px-4 py-3">
-                <div className="text-sm text-slate-700">{note.message}</div>
-                {note.date_ref && (
-                  <div className="text-xs text-slate-400 mt-1">{format(new Date(`${note.date_ref}T00:00:00`), 'dd MMM yyyy')}</div>
+          <div>
+            <div className="px-4 py-4 border-b border-slate-100 bg-white">
+              <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-3">Compact Summary</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                {summaryBuckets.length === 0 ? (
+                  <div className="text-sm text-slate-500">No exceptional generation events in this month.</div>
+                ) : (
+                  summaryBuckets.map(bucket => (
+                    <div key={bucket.key} className={clsx('rounded-xl border px-3 py-3', bucket.tone)}>
+                      <div className="text-2xl font-black leading-none">{bucket.count}</div>
+                      <div className="text-[11px] font-bold uppercase tracking-wider mt-1">{bucket.label}</div>
+                    </div>
+                  ))
                 )}
               </div>
-            ))}
+            </div>
+            <div className="divide-y divide-slate-100">
+              {detailNotes.length === 0 ? (
+                <div className="px-4 py-8 text-sm text-slate-400 text-center">No detailed exception notes for this month.</div>
+              ) : (
+                detailNotes.map((note: Remark) => (
+                  <div key={note.id} className="px-4 py-3">
+                    <div className="text-sm text-slate-700">{note.message}</div>
+                    {note.date_ref && (
+                      <div className="text-xs text-slate-400 mt-1">{format(new Date(`${note.date_ref}T00:00:00`), 'dd MMM yyyy')}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         )}
       </div>

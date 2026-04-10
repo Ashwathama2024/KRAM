@@ -39,6 +39,7 @@ class Staff(Base):
     duty_debt = Column(Integer, default=0)
     working_debt = Column(Integer, default=0)
     holiday_debt = Column(Integer, default=0)
+    privilege_mode = Column(Boolean, default=False, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     availability = relationship("Availability", back_populates="staff", cascade="all, delete-orphan")
@@ -68,9 +69,9 @@ class Availability(Base):
     __tablename__ = "availability"
 
     id = Column(Integer, primary_key=True, index=True)
-    staff_id = Column(Integer, ForeignKey("staff.id"), nullable=False)
-    start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=False)
+    staff_id = Column(Integer, ForeignKey("staff.id"), nullable=False, index=True)
+    start_date = Column(Date, nullable=False, index=True)
+    end_date = Column(Date, nullable=False, index=True)
     availability_type = Column(Enum(AvailabilityTypeEnum), nullable=False, default=AvailabilityTypeEnum.LEAVE)
     reason = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -82,6 +83,8 @@ class RosterSettings(Base):
     __tablename__ = "roster_settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_name = Column(String(200), nullable=True, default=None)
+    unit = Column(String(100), nullable=True, default=None)
     auto_assign_standby = Column(Boolean, default=True)
     separate_weekend_pool = Column(Boolean, default=True)
     gap_hours = Column(Integer, default=24)
@@ -119,3 +122,26 @@ class SwapLog(Base):
     second_staff_before = relationship("Staff", foreign_keys=[second_staff_id_before])
     first_staff_after = relationship("Staff", foreign_keys=[first_staff_id_after])
     second_staff_after = relationship("Staff", foreign_keys=[second_staff_id_after])
+
+
+class ManualOverrideLog(Base):
+    """Audit record for every force-manual assignment on a roster day."""
+    __tablename__ = "manual_override_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    override_type = Column(String(50), nullable=False, default="emergency")
+    reason = Column(Text, nullable=True)
+    heal_applied = Column(Boolean, default=False)
+
+    prev_duty_id = Column(Integer, ForeignKey("staff.id"), nullable=True)
+    prev_standby_id = Column(Integer, ForeignKey("staff.id"), nullable=True)
+    new_duty_id = Column(Integer, ForeignKey("staff.id"), nullable=False)
+    new_standby_id = Column(Integer, ForeignKey("staff.id"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    prev_duty = relationship("Staff", foreign_keys=[prev_duty_id])
+    prev_standby = relationship("Staff", foreign_keys=[prev_standby_id])
+    new_duty = relationship("Staff", foreign_keys=[new_duty_id])
+    new_standby = relationship("Staff", foreign_keys=[new_standby_id])

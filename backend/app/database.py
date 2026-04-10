@@ -49,6 +49,10 @@ def ensure_schema():
             conn.execute(
                 text("ALTER TABLE staff ADD COLUMN abbreviation VARCHAR(12) NOT NULL DEFAULT ''")
             )
+        if "privilege_mode" not in staff_columns:
+            conn.execute(
+                text("ALTER TABLE staff ADD COLUMN privilege_mode BOOLEAN NOT NULL DEFAULT 0")
+            )
 
         roster_columns = {col["name"] for col in inspector.get_columns("roster_settings")} if "roster_settings" in tables else set()
         if "leave_rejoin_buffer_days" not in roster_columns:
@@ -67,6 +71,14 @@ def ensure_schema():
             conn.execute(
                 text("ALTER TABLE roster_settings ADD COLUMN comfort_unavailability_threshold INTEGER NOT NULL DEFAULT 12")
             )
+        if "org_name" not in roster_columns:
+            conn.execute(
+                text("ALTER TABLE roster_settings ADD COLUMN org_name VARCHAR(200)")
+            )
+        if "unit" not in roster_columns:
+            conn.execute(
+                text("ALTER TABLE roster_settings ADD COLUMN unit VARCHAR(100)")
+            )
 
         if "swap_log" in tables:
             swap_columns = {col["name"] for col in inspector.get_columns("swap_log")}
@@ -74,6 +86,24 @@ def ensure_schema():
                 conn.execute(
                     text("ALTER TABLE swap_log ADD COLUMN reason TEXT")
                 )
+
+        # manual_override_log table (created via Base.metadata if absent,
+        # but add it explicitly for existing DBs that predate this migration)
+        if "manual_override_log" not in tables:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS manual_override_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date DATE NOT NULL,
+                    override_type VARCHAR(50) NOT NULL DEFAULT 'emergency',
+                    reason TEXT,
+                    heal_applied BOOLEAN NOT NULL DEFAULT 0,
+                    prev_duty_id INTEGER REFERENCES staff(id),
+                    prev_standby_id INTEGER REFERENCES staff(id),
+                    new_duty_id INTEGER NOT NULL REFERENCES staff(id),
+                    new_standby_id INTEGER REFERENCES staff(id),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
 
 
 def get_db():

@@ -61,7 +61,20 @@
 
 /* Print styles */
 @media print {
+  @page { size: A4 landscape; margin: 8mm; }
+
   .no-print { display: none !important; }
-  body { @apply bg-white text-black; }
+
+  /* Force background colours to print (calendar cell fills) */
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+  body { background: white !important; color: black !important; }
+
+  /* Remove app shell constraints so content fills the full page */
+  body > div, #root > div { display: block !important; }
+  main { max-width: 100% !important; width: 100% !important; padding: 0 !important; margin: 0 !important; }
+
+  /* Shrink calendar cells so the full month fits on one page */
+  .calendar-print-cell { min-height: 55px !important; font-size: 9px !important; padding: 3px !important; }
 }
 

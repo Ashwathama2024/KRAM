@@ -40,6 +40,7 @@ class StaffUpdate(BaseModel):
     duty_debt: Optional[int] = None
     join_date: Optional[date] = None
     relieve_date: Optional[date] = None
+    privilege_mode: Optional[bool] = None
 
 
 class StaffOut(StaffBase):
@@ -50,6 +51,9 @@ class StaffOut(StaffBase):
     total_working_duties: int
     total_holiday_duties: int
     duty_debt: int
+    working_debt: int = 0
+    holiday_debt: int = 0
+    privilege_mode: bool = False
     created_at: Optional[datetime] = None
 
     class Config:
@@ -125,6 +129,8 @@ class GenerateRosterRequest(BaseModel):
 
 
 class RosterSettingsBase(BaseModel):
+    org_name: Optional[str] = None
+    unit: Optional[str] = None
     auto_assign_standby: bool = True
     separate_weekend_pool: bool = True
     gap_hours: int = 24
@@ -195,3 +201,56 @@ class HolidayMark(BaseModel):
     date: date
     holiday_name: Optional[str] = "Closed Holiday"
     is_holiday: bool = True
+
+
+# Setup / Onboarding schemas
+class SetupStatusOut(BaseModel):
+    is_configured: bool
+    has_staff: bool
+    org_name: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class SetupStaffEntry(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150)
+    active: bool = True
+    join_date: Optional[date] = None
+    relieve_date: Optional[date] = None
+
+
+class SetupInitializeRequest(BaseModel):
+    org_name: str = Field(..., min_length=2, max_length=200)
+    unit: Optional[str] = Field(None, max_length=100)
+    staff: List[SetupStaffEntry] = Field(default_factory=list)
+    leave_rejoin_buffer_days: int = 2
+    auto_assign_standby: bool = True
+
+
+# Manual override schemas
+class ManualOverrideRequest(BaseModel):
+    date: date
+    new_duty_id: int
+    new_standby_id: Optional[int] = None
+    reason: Optional[str] = None
+    override_type: str = "emergency"   # emergency | routine | other
+    heal_after: bool = False
+
+
+class ManualOverrideLogOut(BaseModel):
+    id: int
+    date: date
+    override_type: str
+    reason: Optional[str] = None
+    heal_applied: bool
+    prev_duty_id: Optional[int] = None
+    prev_standby_id: Optional[int] = None
+    new_duty_id: int
+    new_standby_id: Optional[int] = None
+    prev_duty: Optional[StaffOut] = None
+    prev_standby: Optional[StaffOut] = None
+    new_duty: Optional[StaffOut] = None
+    new_standby: Optional[StaffOut] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

@@ -1,13 +1,14 @@
 import sys
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from .config import settings
 from .database import Base, engine, ensure_schema
 from .models import models  # ensure models registered
-from .routers import staff, availability, calendar, roster
+from .routers import staff, availability, calendar, roster, setup
 
 # Create DB tables
 Base.metadata.create_all(bind=engine)
@@ -17,17 +18,34 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
     description="Logic-driven duty roster generator with fair rotation algorithm.",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
 )
 
 # API routes
+app.include_router(setup.router, prefix="/api")
 app.include_router(staff.router, prefix="/api")
 app.include_router(availability.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
