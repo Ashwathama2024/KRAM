@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, addMonths, subMonths, endOfMonth } from 'date-fns'
-import { ChevronLeft, ChevronRight, RefreshCw, Download, FileText, Zap } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, FileText, Zap } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { rosterApi, calendarApi, availabilityApi, apiError, type CalendarEntry, type Remark } from '../services/api'
@@ -212,9 +212,6 @@ export default function RosterPage() {
             {healMut.isPending ? 'Healing...' : 'Auto-Heal Roster'}
           </button>
           <div className="flex items-center gap-2 ml-auto">
-            <button onClick={() => triggerDownload(rosterApi.exportCsv(year, month), `KRAM-Roster-${year}-${String(month).padStart(2,'0')}.csv`)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export CSV">
-              <Download className="w-5 h-5" />
-            </button>
             <button onClick={() => triggerDownload(rosterApi.exportPdf(year, month), `KRAM-Roster-${year}-${String(month).padStart(2,'0')}.pdf`)} className="p-2.5 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors border border-slate-100" title="Export PDF">
               <FileText className="w-5 h-5" />
             </button>

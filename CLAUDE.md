@@ -540,3 +540,218 @@ python build_installer.py
 - Co-authored with: `Claude Sonnet 4.6 <noreply@anthropic.com>`
 - Untracked files: `NEXT_STAGE.md`, `backend/KRAM.spec`, `installer/KRAM.iss`, `OnboardingPage.tsx`, `build_installer.py`
 - **Never commit**: `.env`, `*.db`, `node_modules/`, `dist/`
+
+---
+
+## Stage 2 — Multi-Roster Feature (Planned)
+
+### Overview
+Allow users to create **multiple independent duty rosters**, each with its own name, staff pool,
+rotation logic, and calendar. Examples: DSO (Duty Staff Officer), Duty Adhikari, Sentry, Gate
+Duty, QRT, etc. Each roster is completely isolated — different staff, different schedule,
+different PDF output.
+
+The user can add as many roster types as needed. Each appears as a **button in the top navigation
+header**. Clicking a button switches the entire app context (calendar, roster, staff, audit) to
+that duty type.
+
+---
+
+### Core Concept: `RosterType` (new top-level entity)
+
+Every existing model (Staff, Calendar, Availability, RosterSettings) gets a `roster_type_id`
+foreign key. All queries are scoped to the active `roster_type_id`. The default roster (created
+during onboarding) is `roster_type_id = 1`.
+
+```
+RosterType
+  id          INTEGER PK
+  name        TEXT UNIQUE NOT NULL    -- "DSO", "Duty Adhikari", "Sentry", etc.
+  description TEXT                   -- optional label shown in UI
+  color       TEXT                   -- hex color for header badge, e.g. "#1e40af"
+  icon        TEXT                   -- lucide icon name, e.g. "Shield", "Star", "Key"
+  sort_order  INTEGER DEFAULT 0      -- controls button order in header
+  created_at  DATETIME
+```
+
+---
+
+### Data Isolation Model
+
+```
+Staff         → roster_type_id FK  (each staff belongs to exactly one roster type)
+Calendar      → roster_type_id FK  (each calendar day scoped to a roster type)
+Availability  → roster_type_id FK  (leave/OD applies within one roster context)
+RosterSettings→ roster_type_id FK  (gap_hours, buffer_days etc. per roster type)
+```
+
+All existing API endpoints gain an optional `?roster_type_id=` query param (default = 1).
+Alternatively, a header `X-Roster-Type: 2` can carry the context.
+
+---
+
+### New API Endpoints
+
+```
+GET    /api/roster-types/           → RosterTypeOut[]
+POST   /api/roster-types/           → create new roster type
+GET    /api/roster-types/{id}       → single roster type
+PUT    /api/roster-types/{id}       → update name/color/icon/sort_order
+DELETE /api/roster-types/{id}       → delete (cascades staff/calendar/settings)
+```
+
+---
+
+### Frontend Architecture
+
+#### Header Buttons
+- App header renders a **button per RosterType** fetched from `/api/roster-types/`
+- Active roster stored in `RosterContext` (React context, wraps whole app)
+- Switching roster button → updates context → all React Query keys include `roster_type_id`
+  → data re-fetches automatically for the selected roster
+- A `+` button at the end of the roster row opens a **Create Roster** modal
+
+#### Create Roster Modal
+Fields:
+- Name (required, e.g. "Sentry")
+- Description (optional)
+- Color picker (6 preset brand colors)
+- Icon selector (grid of 12 lucide icons)
+
+On submit → POST `/api/roster-types/` → new button appears in header immediately.
+
+#### Context Provider (new file: `src/contexts/RosterContext.tsx`)
+```typescript
+interface RosterContextValue {
+  activeRosterId: number
+  activeRoster: RosterType | null
+  rosterTypes: RosterType[]
+  setActiveRosterId: (id: number) => void
+}
+```
+All existing pages read `activeRosterId` from context and pass it as a query param to every API
+call. React Query key arrays become `['calendar', year, month, activeRosterId]` etc.
+
+---
+
+### Migration Strategy (ensure_schema additions)
+
+```python
+# 1. Create roster_types table if not exists
+conn.execute(text("""
+    CREATE TABLE IF NOT EXISTS roster_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        color TEXT DEFAULT '#1e40af',
+        icon TEXT DEFAULT 'Shield',
+        sort_order INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+"""))
+
+# 2. Seed default roster type (id=1) from existing org_name
+conn.execute(text("""
+    INSERT OR IGNORE INTO roster_types (id, name, description)
+    SELECT 1, COALESCE(org_name, 'Default Roster'), 'Original duty roster'
+    FROM roster_settings LIMIT 1
+"""))
+# Fallback if no settings row yet
+conn.execute(text("""
+    INSERT OR IGNORE INTO roster_types (id, name) VALUES (1, 'Default Roster')
+"""))
+
+# 3. Add roster_type_id to existing tables (all default to 1 for backward compat)
+for table in ['staff', 'calendar', 'availability', 'roster_settings']:
+    cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
+    if 'roster_type_id' not in cols:
+        conn.execute(text(
+            f"ALTER TABLE {table} ADD COLUMN roster_type_id INTEGER NOT NULL DEFAULT 1 "
+            f"REFERENCES roster_types(id)"
+        ))
+```
+
+---
+
+### Roster Engine Scoping
+
+`generate_roster(year, month, roster_type_id)` — all internal queries filter by
+`roster_type_id`. The engine is already stateless (pure function calls), so scoping is
+mechanical: add `filter(Staff.roster_type_id == roster_type_id)` to every staff query,
+and `filter(Calendar.roster_type_id == roster_type_id)` to every calendar query.
+
+No changes to the algorithm itself — each roster runs its own independent two-queue rotation.
+
+---
+
+### Export
+
+PDF header shows roster name instead of (or alongside) org name:
+- Table PDF: `"[RosterType.name] — Month Year Duty Roster"`
+- Calendar PDF: `"[RosterType.name] — Month Year Duty Calendar"`
+- Staff Reference page scoped to the active roster type.
+
+---
+
+### UI/UX Details
+
+- Header roster buttons show a small **colored dot** (RosterType.color) and the roster name
+- Active roster button is highlighted with brand underline / filled bg
+- If only 1 roster type exists, the button strip is hidden (single-roster UX unchanged)
+- Onboarding creates roster_type_id=1 automatically — no user action required
+- Staff page, Audit page, Settings page all operate on active roster context
+- `privilege_mode` remains on Staff model — applies per staff record within its roster type
+
+---
+
+### Implementation Order (when building)
+
+```
+Phase 1 — Backend foundation
+  1. Add RosterType model + ensure_schema migrations
+  2. Add roster_type_id FK to Staff, Calendar, Availability, RosterSettings
+  3. Add /api/roster-types/ CRUD endpoints
+  4. Scope all existing endpoints to roster_type_id query param (default=1)
+  5. Scope roster_engine queries to roster_type_id
+
+Phase 2 — Frontend wiring
+  6. Create RosterContext.tsx provider
+  7. Wrap App in RosterContext, fetch roster types on startup
+  8. Add roster type buttons to header (+ button to create new)
+  9. Update all React Query keys and API calls to include activeRosterId
+  10. Create New Roster modal (name, color, icon)
+
+Phase 3 — Polish
+  11. Delete roster type (with confirmation — cascades all data)
+  12. Reorder roster buttons (drag or up/down arrows in Settings)
+  13. Per-roster settings page (each roster has its own buffer days etc.)
+  14. PDF export reflects roster name in title
+```
+
+---
+
+### Files to Create (new)
+```
+backend/app/models/roster_type.py         ← RosterType ORM model
+backend/app/routers/roster_types.py       ← CRUD router
+backend/app/schemas/roster_type_schema.py ← Pydantic DTOs
+frontend/src/contexts/RosterContext.tsx   ← React context + provider
+frontend/src/components/RosterTypePicker.tsx ← Header button strip + create modal
+```
+
+### Files to Modify (existing)
+```
+backend/app/models/models.py       ← Add roster_type_id FK to Staff, Calendar, etc.
+backend/app/database.py            ← ensure_schema migrations for new table + FKs
+backend/app/routers/staff.py       ← Filter by roster_type_id
+backend/app/routers/calendar.py    ← Filter by roster_type_id
+backend/app/routers/roster.py      ← Filter by roster_type_id; pass to engine
+backend/app/services/roster_engine.py ← All staff/calendar queries scoped
+backend/app/services/export_service.py← Roster name in PDF title
+frontend/src/App.tsx               ← Wrap in RosterContext.Provider
+frontend/src/pages/StaffPage.tsx   ← Pass activeRosterId on create/list
+frontend/src/pages/RosterPage.tsx  ← Pass activeRosterId to all queries
+frontend/src/pages/CalendarPage.tsx← Pass activeRosterId to all queries
+frontend/src/pages/AuditPage.tsx   ← Pass activeRosterId to audit query
+frontend/src/services/api.ts       ← Add RosterType type; add roster_type_id params
+```

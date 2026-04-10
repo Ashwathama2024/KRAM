@@ -70,8 +70,10 @@ def export_pdf(entries: List[Calendar], month: int, year: int) -> bytes:
         pdf.cell(col_widths[0], 7, e.date.strftime("%Y-%m-%d"), border=1, fill=fill)
         pdf.cell(col_widths[1], 7, e.date.strftime("%A"), border=1, fill=fill)
         pdf.cell(col_widths[2], 7, _s(e.day_type.value.capitalize() if e.day_type else ""), border=1, fill=fill)
-        pdf.cell(col_widths[3], 7, _s(e.duty_staff.name if e.duty_staff else "-", 30), border=1, fill=fill)
-        pdf.cell(col_widths[4], 7, _s(e.standby_staff.name if e.standby_staff else "-", 30), border=1, fill=fill)
+        duty_label   = _s((e.duty_staff.abbreviation   or e.duty_staff.name)   if e.duty_staff   else "-", 30)
+        standby_label = _s((e.standby_staff.abbreviation or e.standby_staff.name) if e.standby_staff else "-", 30)
+        pdf.cell(col_widths[3], 7, duty_label,   border=1, fill=fill)
+        pdf.cell(col_widths[4], 7, standby_label, border=1, fill=fill)
         pdf.cell(col_widths[5], 7, _s(e.status.value.capitalize() if e.status else ""), border=1, fill=fill)
         pdf.ln()
 
@@ -174,14 +176,16 @@ def export_calendar_pdf(entries: List[Calendar], month: int, year: int, org_name
                 pdf.set_xy(x + 1, y + 13)
                 pdf.set_font("Helvetica", "B", 7)
                 pdf.set_text_color(*C_SUB)
-                pdf.cell(CELL_W - 2, 4, f"D: {_s(entry.duty_staff.name, 18)}", align="L")
+                duty_abbr = _s(entry.duty_staff.abbreviation or entry.duty_staff.name, 18)
+                pdf.cell(CELL_W - 2, 4, f"D: {duty_abbr}", align="L")
 
             # Standby staff
             if entry.standby_staff:
                 pdf.set_xy(x + 1, y + 18)
                 pdf.set_font("Helvetica", "", 7)
                 pdf.set_text_color(*C_SUB)
-                pdf.cell(CELL_W - 2, 4, f"S: {_s(entry.standby_staff.name, 18)}", align="L")
+                standby_abbr = _s(entry.standby_staff.abbreviation or entry.standby_staff.name, 18)
+                pdf.cell(CELL_W - 2, 4, f"S: {standby_abbr}", align="L")
 
         pdf.set_xy(x + CELL_W, y)
         col += 1
@@ -209,5 +213,49 @@ def export_calendar_pdf(entries: List[Calendar], month: int, year: int, org_name
         pdf.rect(pdf.get_x(), pdf.get_y() + 1, 5, 4, style="F")
         pdf.cell(7, 6, "")
         pdf.cell(40, 6, label)
+
+    # ── Staff Reference Page ────────────────────────────────────────────────────
+    # Collect unique staff who appear in this month's entries
+    seen: dict[int, object] = {}
+    for e in entries:
+        if e.duty_staff and e.duty_staff.id not in seen:
+            seen[e.duty_staff.id] = e.duty_staff
+        if e.standby_staff and e.standby_staff.id not in seen:
+            seen[e.standby_staff.id] = e.standby_staff
+
+    if seen:
+        ref_staff = sorted(seen.values(), key=lambda s: (s.abbreviation or s.name).upper())
+
+        pdf.add_page()
+
+        # Page title
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(*C_HEADER)
+        ref_title = f"Staff Reference - {month_name} {year}"
+        pdf.cell(0, 10, ref_title, align="C")
+        pdf.ln(13)
+
+        # Table header
+        col_abbr = 55
+        col_name = 180
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*C_WHITE)
+        pdf.set_fill_color(*C_HEADER)
+        pdf.cell(col_abbr, 8, "Abbreviation", border=1, align="C", fill=True)
+        pdf.cell(col_name, 8, "Full Name", border=1, align="C", fill=True)
+        pdf.ln(8)
+
+        pdf.set_font("Helvetica", "", 9)
+        for i, s in enumerate(ref_staff):
+            if i % 2 == 0:
+                pdf.set_fill_color(248, 250, 252)   # slate-50 stripe
+            else:
+                pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(*C_TEXT)
+            abbr = _s(s.abbreviation or s.name, 20)
+            full = _s(s.name, 80)
+            pdf.cell(col_abbr, 7, abbr, border=1, align="C", fill=True)
+            pdf.cell(col_name, 7, full, border=1, align="L", fill=True)
+            pdf.ln(7)
 
     return bytes(pdf.output())

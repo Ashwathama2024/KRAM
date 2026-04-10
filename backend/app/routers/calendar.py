@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import date
 import calendar as cal_module
@@ -18,6 +18,7 @@ def export_calendar_pdf_route(year: int, month: int, db: Session = Depends(get_d
     _, days = cal_module.monthrange(year, month)
     entries = (
         db.query(Calendar)
+        .options(joinedload(Calendar.duty_staff), joinedload(Calendar.standby_staff))
         .filter(Calendar.date >= date(year, month, 1), Calendar.date <= date(year, month, days))
         .order_by(Calendar.date)
         .all()
